@@ -1,0 +1,8 @@
+
+# Local Z-Wave development checkpoints
+tools/zwprobe-v*.c
+tools/zwprobe-v*-openwrt
+tools/zwprobe.c.before-*
+tools/zwprobe-v*-before-*.c
+tools/zwprobe-v*-ok.c
+tools/zwprobe-v*-ok-openwrt
