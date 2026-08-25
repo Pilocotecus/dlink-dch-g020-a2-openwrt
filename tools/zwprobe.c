@@ -4,6 +4,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <termios.h>
@@ -1153,6 +1154,1013 @@ static int add_node_receive_one(int fd,
  *
  * El otro extremo pasa por receive_frame() REAL.
  */
+
+/*
+ * Forward declaration.
+ * La implementacion esta mas abajo junto al RX selftest.
+ */
+static int add_node_rx_test_send(int fd,
+                                 uint8_t callback_id,
+                                 uint8_t status,
+                                 int have_node,
+                                 uint8_t node_id);
+
+
+/*
+ * ============================================================
+ * V6.7 - ADD_NODE CALLBACK LOOP
+ * ============================================================
+ *
+ * Consume callbacks ya disponibles en un descriptor.
+ *
+ * IMPORTANTE:
+ *
+ * Esta capa NO inicia inclusion.
+ * NO envia ZW_ADD_NODE_TO_NETWORK.
+ *
+ * Termina cuando:
+ *
+ *   ADD_SM_DONE    -> exito
+ *   ADD_SM_FAILED  -> fallo
+ *   timeout        -> fallo
+ *   error RX       -> fallo
+ */
+static int add_node_callback_loop(int fd,
+                                  struct add_node_sm *sm,
+                                  int callback_timeout_ms,
+                                  unsigned int max_callbacks)
+{
+    unsigned int callbacks = 0;
+
+    if (!sm) {
+        printf("[-] CALLBACK LOOP state machine NULL\n");
+        return 1;
+    }
+
+    if (callback_timeout_ms <= 0) {
+        printf("[-] CALLBACK LOOP timeout invalido\n");
+        return 1;
+    }
+
+    if (max_callbacks == 0) {
+        printf("[-] CALLBACK LOOP max_callbacks invalido\n");
+        return 1;
+    }
+
+    printf("\n");
+    printf("========================================\n");
+    printf(" ADD_NODE CALLBACK LOOP\n");
+    printf("========================================\n");
+    printf("[+] callback timeout        : %d ms\n",
+           callback_timeout_ms);
+    printf("[+] max callbacks           : %u\n",
+           max_callbacks);
+
+    for (;;) {
+        int r;
+
+        if (sm->state == ADD_SM_DONE) {
+            printf("[+] CALLBACK LOOP terminal   : DONE\n");
+            return 0;
+        }
+
+        if (sm->state == ADD_SM_FAILED) {
+            printf("[-] CALLBACK LOOP terminal   : FAILED\n");
+            return 1;
+        }
+
+        if (callbacks >= max_callbacks) {
+            printf("[-] CALLBACK LOOP limite alcanzado: %u\n",
+                   callbacks);
+            return 1;
+        }
+
+        printf("\n");
+        printf("----- CALLBACK %u -----\n",
+               callbacks + 1);
+
+        r = add_node_receive_one(fd,
+                                 sm,
+                                 callback_timeout_ms);
+
+        if (r < 0) {
+            printf("[-] CALLBACK LOOP error de recepcion\n");
+            return 1;
+        }
+
+        if (r == 0) {
+            printf("[-] CALLBACK LOOP timeout esperando callback\n");
+            return 1;
+        }
+
+        callbacks++;
+
+        printf("[+] CALLBACK LOOP procesados : %u\n",
+               callbacks);
+        printf("[+] CALLBACK LOOP estado     : %s\n",
+               add_node_sm_state_name(sm->state));
+    }
+}
+
+
+
+/*
+ * ============================================================
+ * V6.8 - ADD_NODE TRANSACTION
+ * ============================================================
+ *
+ * Camino de transporte:
+ *
+ *   START request
+ *       |
+ *       v
+ *   ACK
+ *       |
+ *       v
+ *   callback loop
+ *       |
+ *       v
+ *   STOP request
+ *       |
+ *       v
+ *   ACK
+ *
+ * STOP se intenta incluso si callback_loop() falla.
+ */
+
+static int add_node_send_request_wait_ack(int fd,
+                                          uint8_t mode,
+                                          uint8_t callback_id,
+                                          const char *name)
+{
+    uint8_t data[2];
+    uint8_t frame[MAX_FRAME];
+    uint8_t early_sof = 0;
+    size_t frame_len = 0;
+    int ctrl;
+
+    data[0] = mode;
+    data[1] = callback_id;
+
+    if (build_request_frame(0x4A,
+                            data,
+                            sizeof(data),
+                            frame,
+                            sizeof(frame),
+                            &frame_len)) {
+        printf("[-] %s: no se pudo construir frame\n", name);
+        return 1;
+    }
+
+    printf("\n");
+    printf("----- %s -----\n", name);
+
+    dump_hex("TX FRAME", frame, frame_len);
+
+    if (write_all(fd, frame, frame_len) < 0) {
+        printf("[-] %s: fallo TX\n", name);
+        return 1;
+    }
+
+    ctrl = wait_request_ack(fd, &early_sof);
+
+    if (ctrl != ACK) {
+        printf("[-] %s: ACK no recibido (ctrl=%02X)\n",
+               name,
+               ctrl < 0 ? 0xFF : ctrl);
+        return 1;
+    }
+
+    printf("[+] %s ACK recibido\n", name);
+
+    return 0;
+}
+
+
+static int add_node_transaction(int fd,
+                                uint8_t callback_id,
+                                int callback_timeout_ms,
+                                unsigned int max_callbacks,
+                                struct add_node_sm *sm)
+{
+    int start_ok = 0;
+    int loop_ok = 0;
+    int stop_ok = 0;
+
+    if (!sm) {
+        printf("[-] TRANSACTION state machine NULL\n");
+        return 1;
+    }
+
+    memset(sm, 0, sizeof(*sm));
+
+    sm->callback_id = callback_id;
+    sm->state = ADD_SM_IDLE;
+
+    printf("\n");
+    printf("========================================\n");
+    printf(" ADD_NODE TRANSACTION\n");
+    printf("========================================\n");
+    printf("[+] callback id            : 0x%02X\n",
+           callback_id);
+
+    /*
+     * START = ADD_NODE_ANY (0x01)
+     */
+    if (add_node_send_request_wait_ack(fd,
+                                       0x01,
+                                       callback_id,
+                                       "ADD_NODE START"))
+        goto cleanup;
+
+    start_ok = 1;
+
+    /*
+     * Procesamos callbacks hasta DONE/FAILED/timeout/error.
+     */
+    if (add_node_callback_loop(fd,
+                               sm,
+                               callback_timeout_ms,
+                               max_callbacks) == 0)
+        loop_ok = 1;
+
+cleanup:
+
+    /*
+     * STOP = ADD_NODE_STOP (0x05)
+     *
+     * Deliberadamente se intenta siempre que START llegó
+     * a ser aceptado.
+     */
+    if (start_ok) {
+        if (add_node_send_request_wait_ack(fd,
+                                           0x05,
+                                           callback_id,
+                                           "ADD_NODE STOP") == 0)
+            stop_ok = 1;
+    }
+
+    printf("\n");
+    printf("========================================\n");
+    printf(" ADD_NODE TRANSACTION RESULT\n");
+    printf(" START : %s\n", start_ok ? "OK" : "ERROR");
+    printf(" LOOP  : %s\n", loop_ok ? "OK" : "ERROR");
+    printf(" STOP  : %s\n",
+           start_ok ? (stop_ok ? "OK" : "ERROR")
+                    : "NOT STARTED");
+    printf(" STATE : %s\n",
+           add_node_sm_state_name(sm->state));
+    printf(" NODE  : %u\n", sm->node_id);
+    printf("========================================\n");
+
+    return (start_ok && loop_ok && stop_ok) ? 0 : 1;
+}
+
+
+/*
+ * Lee exactamente una REQUEST Serial API del extremo
+ * emulado y comprueba FUNC/mode/callback.
+ *
+ * No usa receive_frame(), porque receive_frame() enviaria
+ * ACK automáticamente y aquí el emulador necesita controlar
+ * cuándo devuelve ese ACK.
+ */
+static int add_node_emulator_expect_request(int fd,
+                                            uint8_t expected_mode,
+                                            uint8_t expected_callback)
+{
+    uint8_t frame[MAX_FRAME];
+    uint8_t b;
+    size_t total;
+    size_t pos;
+
+    if (read_byte_timeout(fd, &b, 1000) != 1 ||
+        b != SOF) {
+        printf("[-] EMULATOR: no recibio SOF\n");
+        return 1;
+    }
+
+    frame[0] = b;
+
+    if (read_byte_timeout(fd, &frame[1], 1000) != 1) {
+        printf("[-] EMULATOR: no recibio LENGTH\n");
+        return 1;
+    }
+
+    total = (size_t)frame[1] + 2;
+
+    if (total > sizeof(frame) || total < 7) {
+        printf("[-] EMULATOR: LENGTH invalido\n");
+        return 1;
+    }
+
+    pos = 2;
+
+    while (pos < total) {
+        if (read_byte_timeout(fd,
+                              &frame[pos],
+                              1000) != 1) {
+            printf("[-] EMULATOR: frame incompleto\n");
+            return 1;
+        }
+
+        pos++;
+    }
+
+    dump_hex("EMULATOR RX FRAME", frame, total);
+
+    if (zw_checksum(&frame[1], total - 2) !=
+        frame[total - 1]) {
+        printf("[-] EMULATOR: checksum incorrecto\n");
+        return 1;
+    }
+
+    if (frame[2] != REQUEST ||
+        frame[3] != 0x4A ||
+        frame[4] != expected_mode ||
+        frame[5] != expected_callback) {
+
+        printf("[-] EMULATOR: request inesperada\n");
+        return 1;
+    }
+
+    printf("[+] EMULATOR request correcta"
+           " mode=0x%02X callback=0x%02X\n",
+           expected_mode,
+           expected_callback);
+
+    return 0;
+}
+
+
+/*
+ * Controlador Z-Wave sintético.
+ *
+ * Secuencia:
+ *
+ *   recibe START
+ *   envia ACK
+ *   envia 5 callbacks
+ *   recibe ACK por cada callback
+ *   recibe STOP
+ *   envia ACK
+ */
+static int add_node_transaction_emulator(int fd)
+{
+    static const struct {
+        uint8_t status;
+        int have_node;
+        uint8_t node_id;
+    } events[] = {
+        { 0x01, 0, 0 },
+        { 0x02, 0, 0 },
+        { 0x03, 1, 2 },
+        { 0x05, 1, 2 },
+        { 0x06, 1, 2 }
+    };
+
+    uint8_t b;
+    unsigned int i;
+
+    printf("\n");
+    printf("========================================\n");
+    printf(" V6.8 SYNTHETIC CONTROLLER\n");
+    printf("========================================\n");
+
+    if (add_node_emulator_expect_request(fd,
+                                         0x01,
+                                         0x01))
+        return 1;
+
+    if (write_all(fd, (const uint8_t[]){ ACK }, 1) < 0)
+        return 1;
+
+    printf("[+] EMULATOR START ACK enviado\n");
+
+    for (i = 0;
+         i < sizeof(events) / sizeof(events[0]);
+         i++) {
+
+        printf("\n");
+        printf("----- EMULATOR CALLBACK %u -----\n",
+               i + 1);
+
+        if (add_node_rx_test_send(fd,
+                                  0x01,
+                                  events[i].status,
+                                  events[i].have_node,
+                                  events[i].node_id))
+            return 1;
+
+        if (read_byte_timeout(fd, &b, 1000) != 1 ||
+            b != ACK) {
+            printf("[-] EMULATOR: callback sin ACK\n");
+            return 1;
+        }
+
+        printf("[+] EMULATOR callback ACK recibido\n");
+    }
+
+    if (add_node_emulator_expect_request(fd,
+                                         0x05,
+                                         0x01))
+        return 1;
+
+    if (write_all(fd, (const uint8_t[]){ ACK }, 1) < 0)
+        return 1;
+
+    printf("[+] EMULATOR STOP ACK enviado\n");
+
+    return 0;
+}
+
+
+
+/*
+ * ============================================================
+ * V6.8.1 - ADD_NODE FAILURE PATH SELFTESTS
+ * ============================================================
+ *
+ * Verificamos dos condiciones antes de permitir hardware real:
+ *
+ *   1. FAILED callback
+ *   2. callback timeout
+ *
+ * En AMBOS casos START ya fue aceptado, por tanto la
+ * transaccion DEBE intentar STOP.
+ *
+ * Todo se ejecuta sobre socketpair().
+ * No se abre ttyACM0.
+ */
+
+
+/*
+ * Emulador del caso FAILED.
+ *
+ * Secuencia:
+ *
+ *   START
+ *   ACK
+ *   LEARN_READY
+ *   FAILED
+ *   STOP
+ *   ACK
+ */
+static int add_node_failure_emulator(int fd)
+{
+    uint8_t b;
+
+    printf("\n");
+    printf("========================================\n");
+    printf(" V6.8.1 SYNTHETIC CONTROLLER: FAILED\n");
+    printf("========================================\n");
+
+    if (add_node_emulator_expect_request(fd,
+                                         0x01,
+                                         0x01))
+        return 1;
+
+    if (write_all(fd,
+                  (const uint8_t[]){ ACK },
+                  1) < 0)
+        return 1;
+
+    printf("[+] FAILED EMULATOR START ACK enviado\n");
+
+    /*
+     * LEARN_READY
+     */
+    if (add_node_rx_test_send(fd,
+                              0x01,
+                              0x01,
+                              0,
+                              0))
+        return 1;
+
+    if (read_byte_timeout(fd, &b, 1000) != 1 ||
+        b != ACK) {
+        printf("[-] FAILED EMULATOR: LEARN_READY sin ACK\n");
+        return 1;
+    }
+
+    printf("[+] FAILED EMULATOR LEARN_READY ACK recibido\n");
+
+    /*
+     * FAILED
+     */
+    if (add_node_rx_test_send(fd,
+                              0x01,
+                              0x07,
+                              0,
+                              0))
+        return 1;
+
+    if (read_byte_timeout(fd, &b, 1000) != 1 ||
+        b != ACK) {
+        printf("[-] FAILED EMULATOR: FAILED sin ACK\n");
+        return 1;
+    }
+
+    printf("[+] FAILED EMULATOR FAILED ACK recibido\n");
+
+    /*
+     * Aunque la inclusión haya fallado, esperamos STOP.
+     */
+    if (add_node_emulator_expect_request(fd,
+                                         0x05,
+                                         0x01)) {
+        printf("[-] FAILED EMULATOR: STOP NO recibido\n");
+        return 1;
+    }
+
+    printf("[+] FAILED EMULATOR STOP recibido\n");
+
+    if (write_all(fd,
+                  (const uint8_t[]){ ACK },
+                  1) < 0)
+        return 1;
+
+    printf("[+] FAILED EMULATOR STOP ACK enviado\n");
+
+    return 0;
+}
+
+
+/*
+ * Emulador del caso TIMEOUT.
+ *
+ * Secuencia:
+ *
+ *   START
+ *   ACK
+ *
+ *   <ningun callback>
+ *
+ *   STOP
+ *   ACK
+ */
+static int add_node_timeout_emulator(int fd)
+{
+    printf("\n");
+    printf("========================================\n");
+    printf(" V6.8.1 SYNTHETIC CONTROLLER: TIMEOUT\n");
+    printf("========================================\n");
+
+    if (add_node_emulator_expect_request(fd,
+                                         0x01,
+                                         0x01))
+        return 1;
+
+    if (write_all(fd,
+                  (const uint8_t[]){ ACK },
+                  1) < 0)
+        return 1;
+
+    printf("[+] TIMEOUT EMULATOR START ACK enviado\n");
+    printf("[+] TIMEOUT EMULATOR no envia callbacks\n");
+
+    /*
+     * El padre agotará su callback timeout y después
+     * necesariamente deberá enviarnos STOP.
+     */
+    if (add_node_emulator_expect_request(fd,
+                                         0x05,
+                                         0x01)) {
+        printf("[-] TIMEOUT EMULATOR: STOP NO recibido\n");
+        return 1;
+    }
+
+    printf("[+] TIMEOUT EMULATOR STOP recibido\n");
+
+    if (write_all(fd,
+                  (const uint8_t[]){ ACK },
+                  1) < 0)
+        return 1;
+
+    printf("[+] TIMEOUT EMULATOR STOP ACK enviado\n");
+
+    return 0;
+}
+
+
+/*
+ * Ejecuta una prueba de fallo usando fork/socketpair.
+ *
+ * expected_state permite comprobar que el error observado
+ * es exactamente el esperado.
+ */
+static int add_node_run_failure_case(
+    const char *name,
+    int (*emulator)(int),
+    enum add_node_sm_state expected_state,
+    int callback_timeout_ms)
+{
+    int sv[2] = { -1, -1 };
+    pid_t pid;
+    int status = 0;
+    int parent_rc;
+    int child_rc;
+    struct add_node_sm sm;
+
+    printf("\n");
+    printf("========================================\n");
+    printf(" FAILURE CASE: %s\n", name);
+    printf("========================================\n");
+
+    if (socketpair(AF_UNIX,
+                   SOCK_STREAM,
+                   0,
+                   sv) < 0) {
+        perror("socketpair");
+        return 1;
+    }
+
+    pid = fork();
+
+    if (pid < 0) {
+        perror("fork");
+        close(sv[0]);
+        close(sv[1]);
+        return 1;
+    }
+
+    if (pid == 0) {
+        int rc;
+
+        close(sv[0]);
+
+        rc = emulator(sv[1]);
+
+        close(sv[1]);
+
+        _exit(rc ? 1 : 0);
+    }
+
+    close(sv[1]);
+    sv[1] = -1;
+
+    /*
+     * IMPORTANTE:
+     *
+     * Para FAILED/TIMEOUT esperamos que add_node_transaction()
+     * devuelva ERROR.
+     *
+     * Eso es precisamente lo correcto.
+     */
+    parent_rc = add_node_transaction(sv[0],
+                                     0x01,
+                                     callback_timeout_ms,
+                                     10,
+                                     &sm);
+
+    close(sv[0]);
+    sv[0] = -1;
+
+    if (waitpid(pid, &status, 0) < 0) {
+        perror("waitpid");
+        return 1;
+    }
+
+    child_rc =
+        WIFEXITED(status) &&
+        WEXITSTATUS(status) == 0
+        ? 0 : 1;
+
+    printf("\n");
+    printf("----------------------------------------\n");
+    printf(" FAILURE CASE RESULT: %s\n", name);
+    printf("----------------------------------------\n");
+    printf(" TRANSACTION RC : %d (esperado != 0)\n",
+           parent_rc);
+    printf(" CONTROLLER     : %s\n",
+           child_rc ? "ERROR" : "OK");
+    printf(" FINAL STATE    : %s\n",
+           add_node_sm_state_name(sm.state));
+    printf(" EXPECTED STATE : %s\n",
+           add_node_sm_state_name(expected_state));
+    printf("----------------------------------------\n");
+
+    /*
+     * El caso pasa si:
+     *
+     * - la transacción detectó fallo,
+     * - el controlador sintético vio STOP y terminó OK,
+     * - el estado final es el esperado.
+     */
+    if (parent_rc == 0) {
+        printf("[-] ERROR: transaccion debia fallar\n");
+        return 1;
+    }
+
+    if (child_rc) {
+        printf("[-] ERROR: controlador sintetico fallo\n");
+        return 1;
+    }
+
+    if (sm.state != expected_state) {
+        printf("[-] ERROR: estado final inesperado\n");
+        return 1;
+    }
+
+    printf("[+] FAILURE CASE %s: OK\n", name);
+
+    return 0;
+}
+
+
+static int run_add_node_failure_selftest(void)
+{
+    int failed_rc;
+    int timeout_rc;
+
+    printf("\n");
+    printf("========================================\n");
+    printf(" V6.8.1 ADD_NODE FAILURE SELFTEST\n");
+    printf("========================================\n");
+    printf("[+] OFFLINE: socketpair(AF_UNIX)\n");
+    printf("[+] OFFLINE: synthetic controllers\n");
+    printf("[+] OFFLINE: no se abrira ttyACM0\n");
+    printf("[+] OFFLINE: no se transmitira Z-Wave\n");
+
+    /*
+     * Caso 1: callback FAILED.
+     */
+    failed_rc =
+        add_node_run_failure_case(
+            "FAILED",
+            add_node_failure_emulator,
+            ADD_SM_FAILED,
+            500
+        );
+
+    /*
+     * Caso 2: timeout sin callback.
+     *
+     * Como no llega ningún evento, el estado permanece IDLE.
+     */
+    timeout_rc =
+        add_node_run_failure_case(
+            "TIMEOUT",
+            add_node_timeout_emulator,
+            ADD_SM_IDLE,
+            250
+        );
+
+    printf("\n");
+    printf("========================================\n");
+    printf(" V6.8.1 FAILURE SELFTEST COMPLETE\n");
+    printf(" FAILED PATH  : %s\n",
+           failed_rc ? "ERROR" : "OK");
+    printf(" TIMEOUT PATH : %s\n",
+           timeout_rc ? "ERROR" : "OK");
+    printf(" STOP CLEANUP : %s\n",
+           (!failed_rc && !timeout_rc)
+               ? "OK"
+               : "ERROR");
+    printf("========================================\n");
+
+    return (failed_rc || timeout_rc) ? 1 : 0;
+}
+
+
+static int run_add_node_transaction_selftest(void)
+{
+    int sv[2] = { -1, -1 };
+    pid_t pid;
+    int status = 0;
+    int parent_rc;
+    int child_rc;
+    struct add_node_sm sm;
+
+    printf("\n");
+    printf("========================================\n");
+    printf(" V6.8 ADD_NODE TRANSACTION SELFTEST\n");
+    printf("========================================\n");
+    printf("[+] OFFLINE: socketpair(AF_UNIX)\n");
+    printf("[+] OFFLINE: synthetic controller\n");
+    printf("[+] OFFLINE: no se abrira ttyACM0\n");
+    printf("[+] OFFLINE: no se transmitira Z-Wave\n");
+
+    if (socketpair(AF_UNIX,
+                   SOCK_STREAM,
+                   0,
+                   sv) < 0) {
+        perror("socketpair");
+        return 1;
+    }
+
+    pid = fork();
+
+    if (pid < 0) {
+        perror("fork");
+        close(sv[0]);
+        close(sv[1]);
+        return 1;
+    }
+
+    if (pid == 0) {
+        int rc;
+
+        close(sv[0]);
+
+        rc = add_node_transaction_emulator(sv[1]);
+
+        close(sv[1]);
+
+        _exit(rc ? 1 : 0);
+    }
+
+    close(sv[1]);
+    sv[1] = -1;
+
+    parent_rc = add_node_transaction(sv[0],
+                                     0x01,
+                                     1000,
+                                     10,
+                                     &sm);
+
+    close(sv[0]);
+    sv[0] = -1;
+
+    if (waitpid(pid, &status, 0) < 0) {
+        perror("waitpid");
+        return 1;
+    }
+
+    child_rc =
+        WIFEXITED(status) && WEXITSTATUS(status) == 0
+        ? 0 : 1;
+
+    printf("\n");
+    printf("========================================\n");
+    printf(" TRANSACTION SELFTEST COMPLETE\n");
+    printf(" PARENT      : %s\n",
+           parent_rc ? "ERROR" : "OK");
+    printf(" CONTROLLER  : %s\n",
+           child_rc ? "ERROR" : "OK");
+    printf(" FINAL STATE : %s\n",
+           add_node_sm_state_name(sm.state));
+    printf(" FINAL NODE  : %u\n",
+           sm.node_id);
+    printf("========================================\n");
+
+    if (parent_rc ||
+        child_rc ||
+        sm.state != ADD_SM_DONE ||
+        sm.node_id != 2)
+        return 1;
+
+    return 0;
+}
+
+
+/*
+ * ============================================================
+ * V6.7 - CALLBACK LOOP SELFTEST OFFLINE
+ * ============================================================
+ *
+ * socketpair(AF_UNIX):
+ *
+ *   sv[0] -> productor sintetico
+ *   sv[1] -> callback loop real
+ *
+ * No abre ttyACM0.
+ * No transmite Z-Wave.
+ */
+static int run_add_node_callback_loop_selftest(void)
+{
+    struct add_node_sm sm;
+    int sv[2] = { -1, -1 };
+    uint8_t ack;
+    unsigned int i;
+    int rc = 1;
+
+    struct test_event {
+        uint8_t status;
+        int have_node;
+        uint8_t node_id;
+    };
+
+    static const struct test_event events[] = {
+        { 0x01, 0, 0 }, /* LEARN_READY */
+        { 0x02, 0, 0 }, /* NODE_FOUND */
+        { 0x03, 1, 2 }, /* ADDING_SLAVE */
+        { 0x05, 1, 2 }, /* PROTOCOL_DONE */
+        { 0x06, 1, 2 }, /* DONE */
+    };
+
+    memset(&sm, 0, sizeof(sm));
+
+    sm.callback_id = 0x01;
+    sm.state = ADD_SM_IDLE;
+
+    printf("\n");
+    printf("========================================\n");
+    printf(" V6.7 ADD_NODE CALLBACK LOOP SELFTEST\n");
+    printf("========================================\n");
+    printf("[+] OFFLINE: socketpair(AF_UNIX)\n");
+    printf("[+] OFFLINE: no se abrira ttyACM0\n");
+    printf("[+] OFFLINE: no se transmitira Z-Wave\n");
+
+    if (socketpair(AF_UNIX,
+                   SOCK_STREAM,
+                   0,
+                   sv) < 0) {
+        perror("socketpair");
+        return 1;
+    }
+
+    /*
+     * Precargamos todos los callbacks en el socket.
+     * El loop del otro extremo los consumira mediante
+     * receive_frame() -> add_node_process_frame() -> SM.
+     */
+    for (i = 0;
+         i < sizeof(events) / sizeof(events[0]);
+         i++) {
+
+        printf("\n");
+        printf("----- PRELOAD EVENT %u -----\n",
+               i + 1);
+
+        if (add_node_rx_test_send(sv[0],
+                                  0x01,
+                                  events[i].status,
+                                  events[i].have_node,
+                                  events[i].node_id))
+            goto out;
+    }
+
+    /*
+     * Ejecutamos el loop real.
+     */
+    if (add_node_callback_loop(sv[1],
+                               &sm,
+                               500,
+                               10))
+        goto out;
+
+    /*
+     * receive_frame() ha debido generar un ACK
+     * por cada uno de los cinco callbacks.
+     */
+    for (i = 0;
+         i < sizeof(events) / sizeof(events[0]);
+         i++) {
+
+        if (read_byte_timeout(sv[0],
+                              &ack,
+                              500) != 1) {
+            printf("[-] SELFTEST no recibio ACK %u\n",
+                   i + 1);
+            goto out;
+        }
+
+        printf("[+] SELFTEST ACK %u           : %02X\n",
+               i + 1, ack);
+
+        if (ack != ACK) {
+            printf("[-] SELFTEST ACK inesperado\n");
+            goto out;
+        }
+    }
+
+    if (sm.state != ADD_SM_DONE) {
+        printf("[-] CALLBACK LOOP estado final inesperado: %s\n",
+               add_node_sm_state_name(sm.state));
+        goto out;
+    }
+
+    if (!sm.have_node ||
+        sm.node_id != 2) {
+        printf("[-] CALLBACK LOOP Node ID final inesperado\n");
+        goto out;
+    }
+
+    printf("\n");
+    printf("========================================\n");
+    printf(" CALLBACK LOOP SELFTEST COMPLETE\n");
+    printf(" FINAL STATE : %s\n",
+           add_node_sm_state_name(sm.state));
+    printf(" FINAL NODE  : %u\n",
+           sm.node_id);
+    printf(" CALLBACKS   : 5\n");
+    printf(" ACKS        : 5/5\n");
+    printf("========================================\n");
+
+    rc = 0;
+
+out:
+    if (sv[0] >= 0)
+        close(sv[0]);
+
+    if (sv[1] >= 0)
+        close(sv[1]);
+
+    return rc;
+}
+
+
 static int add_node_rx_test_send(int fd,
                                  uint8_t callback_id,
                                  uint8_t status,
@@ -2036,6 +3044,136 @@ static int run_inventory(int fd)
     return 0;
 }
 
+
+/*
+ * ============================================================
+ * V6.9 - REAL ADD_NODE MODE
+ * ============================================================
+ *
+ * ATENCION:
+ *
+ * Esta funcion SI utiliza el controlador Z-Wave real.
+ * Debe llamarse solamente despues de setup_serial().
+ *
+ * Toda la transaccion reutiliza la infraestructura validada:
+ *
+ *   START
+ *     -> ACK
+ *     -> callback loop
+ *     -> state machine
+ *     -> STOP cleanup
+ *
+ * El STOP se intenta tanto después de DONE como ante error/
+ * timeout mediante add_node_transaction().
+ */
+static int run_add_node_real(int fd)
+{
+    struct add_node_sm sm;
+    const uint8_t callback_id = 0x01;
+    int rc;
+
+    memset(&sm, 0, sizeof(sm));
+
+    sm.callback_id = callback_id;
+    sm.state = ADD_SM_IDLE;
+
+    printf("\n");
+    printf("========================================\n");
+    printf(" V6.9 REAL Z-WAVE ADD_NODE\n");
+    printf("========================================\n");
+    printf("[!] ATENCION: modo REAL\n");
+    printf("[!] Se iniciara inclusion en el controlador Z-Wave\n");
+    printf("[+] callback id            : 0x%02X\n",
+           callback_id);
+    printf("\n");
+    printf("[+] Pon el dispositivo Z-Wave que quieras incluir\n");
+    printf("[+] en modo inclusion cuando aparezca LEARN_READY.\n");
+
+    rc = add_node_transaction(fd,
+                              callback_id,
+                              30000,
+                              32,
+                              &sm);
+
+    /*
+     * V6.9.1:
+     *
+     * Algunos controladores Serial API reales pueden completar
+     * la inclusion y dejar el ultimo callback observado en
+     * PROTOCOL_DONE sin entregar posteriormente DONE.
+     *
+     * NO consideramos PROTOCOL_DONE suficiente por si solo.
+     *
+     * Si tenemos un Node ID valido, verificamos contra
+     * SERIAL_API_GET_INIT_DATA que dicho nodo aparece realmente
+     * en el mapa persistido del controlador.
+     */
+    if (rc != 0 &&
+        sm.state == ADD_SM_PROTOCOL_DONE &&
+        sm.have_node &&
+        sm.node_id != 0) {
+
+        size_t i;
+        int node_verified = 0;
+
+        printf("\n");
+        printf("========================================\n");
+        printf(" V6.9.1 POST-INCLUSION VERIFY\n");
+        printf("========================================\n");
+        printf("[+] PROTOCOL_DONE recibido sin DONE\n");
+        printf("[+] Node candidato          : %u (0x%02X)\n",
+               sm.node_id,
+               sm.node_id);
+        printf("[+] Verificando INIT_DATA...\n");
+
+        if (run_query(fd,
+                      0x02,
+                      "SERIAL_API_GET_INIT_DATA") == 0) {
+
+            for (i = 0; i < discovered_node_count; i++) {
+                if (discovered_nodes[i] == sm.node_id) {
+                    node_verified = 1;
+                    break;
+                }
+            }
+        }
+
+        if (node_verified) {
+            printf("[+] Node %u CONFIRMADO en mapa Z-Wave\n",
+                   sm.node_id);
+            printf("[+] Inclusion verificada tras PROTOCOL_DONE\n");
+
+            sm.state = ADD_SM_DONE;
+            rc = 0;
+        } else {
+            printf("[-] Node %u NO aparece en mapa Z-Wave\n",
+                   sm.node_id);
+            printf("[-] PROTOCOL_DONE NO se acepta como exito\n");
+        }
+
+        printf("========================================\n");
+    }
+
+    printf("\n");
+    printf("========================================\n");
+    printf(" REAL ADD_NODE RESULT\n");
+    printf(" RC    : %d\n", rc);
+    printf(" STATE : %s\n",
+           add_node_sm_state_name(sm.state));
+    printf(" NODE  : %u\n",
+           sm.node_id);
+    printf("========================================\n");
+
+    if (rc == 0 && sm.state == ADD_SM_DONE) {
+        printf("[+] Inclusion terminada correctamente\n");
+        return 0;
+    }
+
+    printf("[-] Inclusion NO completada\n");
+    return 1;
+}
+
+
 static void usage(const char *prog)
 {
     fprintf(stderr,
@@ -2046,7 +3184,10 @@ static void usage(const char *prog)
         "--node-info NODE|--inventory|"
         "--add-node-dry-run|"
         "--add-node-callback-selftest|--add-node-state-selftest|"
-        "--add-node-pipeline-selftest|--add-node-rx-selftest] [dispositivo]\n",
+        "--add-node-pipeline-selftest|--add-node-rx-selftest|"
+        "--add-node-loop-selftest|"
+        "--add-node-transaction-selftest|"
+        "--add-node-failure-selftest|--add-node-real] [dispositivo]\n",
         prog);
 }
 
@@ -2087,6 +3228,14 @@ int main(int argc, char **argv)
             mode = 13;
         else if (!strcmp(argv[1], "--add-node-rx-selftest"))
             mode = 14;
+        else if (!strcmp(argv[1], "--add-node-loop-selftest"))
+            mode = 15;
+        else if (!strcmp(argv[1], "--add-node-transaction-selftest"))
+            mode = 16;
+        else if (!strcmp(argv[1], "--add-node-failure-selftest"))
+            mode = 17;
+        else if (!strcmp(argv[1], "--add-node-real"))
+            mode = 18;
         else if (!strcmp(argv[1], "--node-info")) {
             char *endp;
 
@@ -2142,6 +3291,10 @@ int main(int argc, char **argv)
            mode == 12 ? "ADD_NODE_STATE_SELFTEST" :
            mode == 13 ? "ADD_NODE_PIPELINE_SELFTEST" :
            mode == 14 ? "ADD_NODE_RX_PATH_SELFTEST" :
+           mode == 15 ? "ADD_NODE_CALLBACK_LOOP_SELFTEST" :
+           mode == 16 ? "ADD_NODE_TRANSACTION_SELFTEST" :
+           mode == 17 ? "ADD_NODE_FAILURE_SELFTEST" :
+           mode == 18 ? "ADD_NODE_REAL" :
                         "PREPARE_ONLY");
 
     printf("========================================\n");
@@ -2197,12 +3350,42 @@ int main(int argc, char **argv)
         return rc;
     }
 
+    if (mode == 15) {
+        rc = run_add_node_callback_loop_selftest();
+
+        printf("\n[+] resultado: %s\n",
+               rc ? "ERROR" : "OK");
+
+        return rc;
+    }
+
+    if (mode == 16) {
+        rc = run_add_node_transaction_selftest();
+
+        printf("\n[+] resultado: %s\n",
+               rc ? "ERROR" : "OK");
+
+        return rc;
+    }
+
+    if (mode == 17) {
+        rc = run_add_node_failure_selftest();
+
+        printf("\n[+] resultado: %s\n",
+               rc ? "ERROR" : "OK");
+
+        return rc;
+    }
+
     fd = setup_serial(dev);
 
     if (fd < 0)
         return 1;
 
-    if (mode == 0) {
+    if (mode == 18) {
+        rc = run_add_node_real(fd);
+
+    } else if (mode == 0) {
         printf("[+] PREPARE ONLY: no se ha enviado ningun byte Z-Wave.\n");
 
     } else if (mode == 1) {
