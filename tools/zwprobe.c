@@ -3174,6 +3174,1599 @@ static int run_add_node_real(int fd)
 }
 
 
+
+/*
+ * ============================================================
+ * V7.0 - PASSIVE SERIAL API LISTENER
+ * ============================================================
+ *
+ * Escucha tramas espontaneas procedentes del controlador.
+ *
+ * NO envia comandos Z-Wave.
+ * NO inicia inclusion/exclusion.
+ * NO ejecuta ZW_SEND_DATA.
+ *
+ * receive_frame() envia el ACK de transporte requerido por
+ * Serial API cuando recibe una trama valida.
+ */
+
+
+/*
+ * V7.1 - ZW_SEND_DATA TRANSPORT
+ *
+ * Construye una peticion FUNC_ID_ZW_SEND_DATA (0x13).
+ *
+ * Payload Serial API:
+ *
+ *   NODE
+ *   DATA_LEN
+ *   COMMAND_CLASS COMMAND ...
+ *   TX_OPTIONS
+ *   CALLBACK_ID
+ *
+ * Esta funcion solo construye la trama.
+ * NO abre ningun puerto y NO transmite nada.
+ */
+static int build_zw_send_data_frame(uint8_t node_id,
+                                    const uint8_t *command,
+                                    size_t command_len,
+                                    uint8_t tx_options,
+                                    uint8_t callback_id,
+                                    uint8_t *frame,
+                                    size_t frame_size,
+                                    size_t *frame_len)
+{
+    uint8_t data[MAX_FRAME];
+    size_t data_len;
+
+    if (node_id == 0 || node_id > 232) {
+        printf("[-] ZW_SEND_DATA Node ID invalido: %u\n",
+               node_id);
+        return -1;
+    }
+
+    if (!command || command_len == 0) {
+        printf("[-] ZW_SEND_DATA comando vacio\n");
+        return -1;
+    }
+
+    /*
+     * NODE + LENGTH + COMMAND + TX_OPTIONS + CALLBACK
+     */
+    data_len = command_len + 4;
+
+    if (data_len > sizeof(data)) {
+        printf("[-] ZW_SEND_DATA payload demasiado grande\n");
+        return -1;
+    }
+
+    data[0] = node_id;
+    data[1] = (uint8_t)command_len;
+
+    memcpy(&data[2], command, command_len);
+
+    data[2 + command_len] = tx_options;
+    data[3 + command_len] = callback_id;
+
+    return build_request_frame(0x13,
+                               data,
+                               data_len,
+                               frame,
+                               frame_size,
+                               frame_len);
+}
+
+
+/*
+ * V7.1 OFFLINE SELFTEST
+ *
+ * No llama setup_serial().
+ * No abre /dev/ttyACM0.
+ * No transmite Z-Wave.
+ *
+ * Construimos:
+ *
+ *   Node       = 2
+ *   Command    = 84 05
+ *   TX options = 0x25
+ *   Callback   = 0x01
+ *
+ * El objetivo de V7.1 es validar exclusivamente
+ * el transporte/frame de ZW_SEND_DATA.
+ */
+static int run_zw_send_data_selftest(void)
+{
+    uint8_t frame[MAX_FRAME];
+    size_t frame_len = 0;
+
+    static const uint8_t command[] = {
+        0x84, 0x05
+    };
+
+    printf("\n");
+    printf("========================================\n");
+    printf(" V7.1 ZW_SEND_DATA OFFLINE SELFTEST\n");
+    printf("========================================\n");
+    printf("[+] OFFLINE: no se abrira ttyACM0\n");
+    printf("[+] OFFLINE: no se transmitira Z-Wave\n");
+    printf("[+] Node ID                : 2\n");
+    printf("[+] Command                : 84 05\n");
+    printf("[+] TX options             : 0x25\n");
+    printf("[+] Callback ID            : 0x01\n");
+
+    if (build_zw_send_data_frame(2,
+                                 command,
+                                 sizeof(command),
+                                 0x25,
+                                 0x01,
+                                 frame,
+                                 sizeof(frame),
+                                 &frame_len) < 0) {
+        printf("[-] No se pudo construir ZW_SEND_DATA\n");
+        return 1;
+    }
+
+    dump_hex("ZW_SEND_DATA DRY FRAME",
+             frame,
+             frame_len);
+
+    /*
+     * Esperamos:
+     *
+     * SOF
+     * LEN = 9
+     * REQUEST
+     * FUNC = 13
+     * NODE = 02
+     * CMDLEN = 02
+     * CMD = 84 05
+     * TXOPT = 25
+     * CALLBACK = 01
+     * CHECKSUM
+     */
+    if (frame_len != 11) {
+        printf("[-] Longitud inesperada: %zu (esperada=11)\n",
+               frame_len);
+        return 1;
+    }
+
+    if (frame[0] != SOF ||
+        frame[1] != 0x09 ||
+        frame[2] != REQUEST ||
+        frame[3] != 0x13 ||
+        frame[4] != 0x02 ||
+        frame[5] != 0x02 ||
+        frame[6] != 0x84 ||
+        frame[7] != 0x05 ||
+        frame[8] != 0x25 ||
+        frame[9] != 0x01) {
+        printf("[-] Contenido ZW_SEND_DATA inesperado\n");
+        return 1;
+    }
+
+    if (frame[frame_len - 2] != 0x01) {
+        printf("[-] Callback ID inesperado: %02X\n",
+               frame[frame_len - 2]);
+        return 1;
+    }
+
+    if (zw_checksum(&frame[1], frame_len - 2) !=
+        frame[frame_len - 1]) {
+        printf("[-] Checksum ZW_SEND_DATA incorrecto\n");
+        return 1;
+    }
+
+    printf("[+] FUNC_ID_ZW_SEND_DATA   : 0x13\n");
+    printf("[+] Frame estructuralmente correcto\n");
+    printf("[+] Checksum correcto\n");
+    printf("[+] Ningun byte transmitido\n");
+    printf("========================================\n");
+
+    return 0;
+}
+
+
+static void decode_application_command_handler(const uint8_t *f,
+                                               size_t n)
+{
+    const uint8_t *d;
+    size_t data_len;
+    uint8_t rx_status;
+    uint8_t source_node;
+    uint8_t command_len;
+    size_t i;
+
+    /*
+     * APPLICATION_COMMAND_HANDLER:
+     *
+     * REQUEST 0x04
+     *
+     * DATA:
+     *   [0] RX status
+     *   [1] source node
+     *   [2] command length
+     *   [3...] command
+     */
+    if (!f || n < 8) {
+        printf("[!] APPLICATION_COMMAND_HANDLER demasiado corto\n");
+        return;
+    }
+
+    if (f[0] != SOF ||
+        f[2] != REQUEST ||
+        f[3] != 0x04) {
+        printf("[!] No es APPLICATION_COMMAND_HANDLER\n");
+        return;
+    }
+
+    d = &f[4];
+    data_len = n - 5;
+
+    if (data_len < 3) {
+        printf("[!] APPLICATION_COMMAND_HANDLER sin cabecera completa\n");
+        return;
+    }
+
+    rx_status = d[0];
+    source_node = d[1];
+    command_len = d[2];
+
+    printf("[+] APPLICATION_COMMAND_HANDLER\n");
+    printf("[+] RX status              : 0x%02X\n",
+           rx_status);
+    printf("[+] Source Node            : %u (0x%02X)\n",
+           source_node,
+           source_node);
+    printf("[+] Command length         : %u\n",
+           command_len);
+
+    if ((size_t)command_len > data_len - 3) {
+        printf("[!] Command length invalido: "
+               "declarado=%u disponible=%zu\n",
+               command_len,
+               data_len - 3);
+        return;
+    }
+
+    printf("[+] Z-Wave command         :");
+
+    for (i = 0; i < command_len; i++)
+        printf(" %02X", d[3 + i]);
+
+    printf("\n");
+
+    if (command_len >= 2) {
+        uint8_t cc = d[3];
+        uint8_t cmd = d[4];
+
+        printf("[+] Command Class          : 0x%02X\n", cc);
+        printf("[+] Command                : 0x%02X\n", cmd);
+
+        /*
+         * V7.11 - DCH-Z110 PASSIVE COMMAND CLASS DECODER
+         *
+         * SOLO interpreta bytes ya recibidos.
+         * NO envia ZW_SEND_DATA.
+         * NO responde al nodo.
+         * NO modifica asociaciones/configuracion.
+         */
+        printf("[+] V7.11 decode            : ");
+
+        switch (cc) {
+        case 0x84:
+            printf("COMMAND_CLASS_WAKE_UP");
+
+            if (cmd == 0x07)
+                printf(" / WAKE_UP_NOTIFICATION");
+            else if (cmd == 0x08)
+                printf(" / WAKE_UP_NO_MORE_INFORMATION");
+            else
+                printf(" / command 0x%02X", cmd);
+
+            printf("\n");
+            break;
+
+        case 0x80:
+            printf("COMMAND_CLASS_BATTERY");
+
+            if (cmd == 0x03 && command_len >= 3) {
+                uint8_t level = d[5];
+
+                printf(" / BATTERY_REPORT");
+
+                if (level == 0xFF)
+                    printf(" / LOW BATTERY WARNING");
+                else if (level <= 100)
+                    printf(" / level=%u%%", level);
+                else
+                    printf(" / raw=0x%02X", level);
+            } else {
+                printf(" / command 0x%02X", cmd);
+            }
+
+            printf("\n");
+            break;
+
+        case 0x71:
+            printf("COMMAND_CLASS_NOTIFICATION");
+
+            if (cmd == 0x05)
+                printf(" / NOTIFICATION_GET");
+            else if (cmd == 0x06)
+                printf(" / NOTIFICATION_REPORT");
+            else if (cmd == 0x07)
+                printf(" / NOTIFICATION_SET");
+            else
+                printf(" / command 0x%02X", cmd);
+
+            printf("\n");
+            break;
+
+        case 0x30:
+            printf("COMMAND_CLASS_SENSOR_BINARY");
+
+            if (cmd == 0x02)
+                printf(" / SENSOR_BINARY_GET");
+            else if (cmd == 0x03) {
+                printf(" / SENSOR_BINARY_REPORT");
+
+                if (command_len >= 3)
+                    printf(" / value=0x%02X", d[5]);
+            } else {
+                printf(" / command 0x%02X", cmd);
+            }
+
+            printf("\n");
+            break;
+
+        case 0x31:
+            printf("COMMAND_CLASS_SENSOR_MULTILEVEL");
+
+            if (cmd == 0x04)
+                printf(" / SENSOR_MULTILEVEL_GET");
+            else if (cmd == 0x05)
+                printf(" / SENSOR_MULTILEVEL_REPORT");
+            else
+                printf(" / command 0x%02X", cmd);
+
+            printf("\n");
+            break;
+
+        case 0x85:
+            printf("COMMAND_CLASS_ASSOCIATION");
+
+            if (cmd == 0x01)
+                printf(" / ASSOCIATION_SET");
+            else if (cmd == 0x02)
+                printf(" / ASSOCIATION_GET");
+            else if (cmd == 0x03)
+                printf(" / ASSOCIATION_REPORT");
+            else if (cmd == 0x04)
+                printf(" / ASSOCIATION_REMOVE");
+            else if (cmd == 0x05)
+                printf(" / ASSOCIATION_GROUPINGS_GET");
+            else if (cmd == 0x06)
+                printf(" / ASSOCIATION_GROUPINGS_REPORT");
+            else
+                printf(" / command 0x%02X", cmd);
+
+            printf("\n");
+            break;
+
+        case 0x70:
+            printf("COMMAND_CLASS_CONFIGURATION");
+
+            if (cmd == 0x04)
+                printf(" / CONFIGURATION_SET");
+            else if (cmd == 0x05)
+                printf(" / CONFIGURATION_GET");
+            else if (cmd == 0x06)
+                printf(" / CONFIGURATION_REPORT");
+            else
+                printf(" / command 0x%02X", cmd);
+
+            printf("\n");
+            break;
+
+        case 0x72:
+            printf("COMMAND_CLASS_MANUFACTURER_SPECIFIC");
+
+            if (cmd == 0x04)
+                printf(" / MANUFACTURER_SPECIFIC_GET");
+            else if (cmd == 0x05)
+                printf(" / MANUFACTURER_SPECIFIC_REPORT");
+            else
+                printf(" / command 0x%02X", cmd);
+
+            printf("\n");
+            break;
+
+        case 0x86:
+            printf("COMMAND_CLASS_VERSION");
+
+            if (cmd == 0x11)
+                printf(" / VERSION_GET");
+            else if (cmd == 0x12)
+                printf(" / VERSION_REPORT");
+            else if (cmd == 0x13)
+                printf(" / VERSION_COMMAND_CLASS_GET");
+            else if (cmd == 0x14)
+                printf(" / VERSION_COMMAND_CLASS_REPORT");
+            else
+                printf(" / command 0x%02X", cmd);
+
+            printf("\n");
+            break;
+
+        default:
+            printf("UNKNOWN_COMMAND_CLASS_0x%02X / command 0x%02X\n",
+                   cc,
+                   cmd);
+            break;
+        }
+    }
+}
+
+
+
+/*
+ * V7.2 - ZW_SEND_DATA TRANSACTION CORE
+ *
+ * Transporte HOST -> controlador.
+ *
+ * Esta funcion:
+ *
+ *   1. construye ZW_SEND_DATA
+ *   2. envia la trama Serial API
+ *   3. espera ACK del controlador
+ *   4. recibe RESPONSE de FUNC_ID 0x13
+ *
+ * IMPORTANTE:
+ *
+ * Todavia NO esperamos aqui el callback final de transmision.
+ * Eso sera una fase posterior de V7.2.
+ */
+/*
+ * V7.6 forward declaration.
+ *
+ * La implementacion esta mas abajo, junto al parser
+ * de callback V7.3/V7.4.
+ */
+static int zw_send_data_wait_callback(int fd,
+                                      uint8_t expected_callback_id,
+                                      uint8_t *tx_status);
+
+
+static int zw_send_data_transaction(int fd,
+                                    uint8_t node_id,
+                                    const uint8_t *command,
+                                    size_t command_len,
+                                    uint8_t tx_options,
+                                    uint8_t callback_id)
+{
+    uint8_t request[MAX_FRAME];
+    uint8_t response[MAX_FRAME];
+    uint8_t early_sof = 0;
+    size_t request_len = 0;
+    size_t response_len = 0;
+    int ctrl;
+
+    printf("\n");
+    printf("========================================\n");
+    printf(" V7.2 ZW_SEND_DATA TRANSACTION\n");
+    printf("========================================\n");
+
+    printf("[+] Node ID                : %u (0x%02X)\n",
+           node_id,
+           node_id);
+
+    printf("[+] Command length         : %zu\n",
+           command_len);
+
+    if (command && command_len)
+        dump_hex("Z-Wave command", command, command_len);
+
+    printf("[+] TX options             : 0x%02X\n",
+           tx_options);
+
+    printf("[+] Callback ID            : 0x%02X\n",
+           callback_id);
+
+    if (node_id == 0 || node_id > 232) {
+        printf("[-] Node ID invalido\n");
+        return -1;
+    }
+
+    if (!command || command_len == 0) {
+        printf("[-] Command invalido\n");
+        return -1;
+    }
+
+    if (callback_id == 0) {
+        printf("[-] Callback ID 0 no permitido\n");
+        return -1;
+    }
+
+    if (build_zw_send_data_frame(node_id,
+                                 command,
+                                 command_len,
+                                 tx_options,
+                                 callback_id,
+                                 request,
+                                 sizeof(request),
+                                 &request_len) < 0) {
+        printf("[-] No se pudo construir ZW_SEND_DATA\n");
+        return -1;
+    }
+
+    dump_hex("TX FRAME", request, request_len);
+
+    if (write_all(fd, request, request_len) < 0) {
+        printf("[-] Error enviando ZW_SEND_DATA\n");
+        return -1;
+    }
+
+    ctrl = wait_request_ack(fd, &early_sof);
+
+    if (ctrl == ACK) {
+        printf("[+] ZW_SEND_DATA ACK recibido\n");
+
+        if (receive_frame(fd,
+                          response,
+                          sizeof(response),
+                          &response_len,
+                          0) < 0) {
+            printf("[-] RESPONSE ZW_SEND_DATA invalida\n");
+            return -1;
+        }
+
+    } else if (ctrl == SOF && early_sof) {
+
+        printf("[+] RESPONSE temprana detectada\n");
+
+        if (receive_frame(fd,
+                          response,
+                          sizeof(response),
+                          &response_len,
+                          1) < 0) {
+            printf("[-] RESPONSE temprana invalida\n");
+            return -1;
+        }
+
+    } else {
+        printf("[-] ZW_SEND_DATA no aceptado por enlace Serial API\n");
+        return -1;
+    }
+
+    if (response_len < 6) {
+        printf("[-] RESPONSE ZW_SEND_DATA demasiado corta\n");
+        return -1;
+    }
+
+    if (response[2] != RESPONSE) {
+        printf("[-] TYPE inesperado: 0x%02X\n",
+               response[2]);
+        return -1;
+    }
+
+    if (response[3] != 0x13) {
+        printf("[-] FUNC_ID inesperado: 0x%02X\n",
+               response[3]);
+        return -1;
+    }
+
+    /*
+     * RESPONSE de ZW_SEND_DATA:
+     *
+     * DATA[0] != 0 -> controlador acepta la transmision.
+     *
+     * Esto NO significa todavia que el nodo haya recibido
+     * correctamente el comando. Para eso necesitamos el
+     * callback REQUEST/FUNC_ID 0x13 posterior.
+     */
+    printf("[+] ZW_SEND_DATA RESPONSE  : 0x%02X\n",
+           response[4]);
+
+    if (response[4] == 0x00) {
+        printf("[-] Controlador rechazo ZW_SEND_DATA\n");
+        return -1;
+    }
+
+    printf("[+] Controlador acepto ZW_SEND_DATA\n");
+
+    /*
+     * V7.6:
+     *
+     * RESPONSE != callback.
+     *
+     * La transaccion solo puede considerarse completa
+     * despues de recibir REQUEST/FUNC_ID 0x13 con el
+     * callback_id correspondiente y TRANSMIT_COMPLETE_OK.
+     */
+    {
+        uint8_t tx_status = 0xFF;
+
+        printf("[+] Esperando callback TX  : 0x%02X\n",
+               callback_id);
+
+        if (zw_send_data_wait_callback(fd,
+                                       callback_id,
+                                       &tx_status) != 0) {
+            printf("[-] ZW_SEND_DATA callback fallo\n");
+            return -1;
+        }
+
+        if (tx_status != 0x00) {
+            printf("[-] ZW_SEND_DATA TX status final: 0x%02X\n",
+                   tx_status);
+            return -1;
+        }
+
+        printf("[+] ZW_SEND_DATA transaccion completa\n");
+        printf("[+] TRANSMIT_COMPLETE_OK\n");
+    }
+
+    return 0;
+}
+
+
+
+
+/*
+ * ============================================================
+ * V7.3 - ZW_SEND_DATA CALLBACK
+ * ============================================================
+ *
+ * Procesa el callback asincrono posterior a ZW_SEND_DATA.
+ *
+ * Serial API:
+ *
+ *   TYPE    = REQUEST  (0x00)
+ *   FUNC_ID = 0x13     (ZW_SEND_DATA)
+ *
+ * DATA:
+ *
+ *   [0] callback_id
+ *   [1] tx_status
+ *
+ * Esta funcion NO lee del puerto y NO transmite nada.
+ * Solo valida una trama ya recibida por receive_frame().
+ */
+static int zw_send_data_process_callback(const uint8_t *frame,
+                                         size_t frame_len,
+                                         uint8_t expected_callback_id,
+                                         uint8_t *tx_status)
+{
+    uint8_t callback_id;
+    uint8_t status;
+
+    if (!frame || !tx_status) {
+        printf("[-] V7.3 callback: argumento NULL\n");
+        return -1;
+    }
+
+    /*
+     * Trama minima:
+     *
+     * SOF LEN TYPE FUNC CALLBACK STATUS CHECKSUM
+     *
+     * 7 bytes.
+     */
+    if (frame_len < 7) {
+        printf("[-] V7.3 callback demasiado corto: %zu\n",
+               frame_len);
+        return -1;
+    }
+
+    if (frame[0] != SOF) {
+        printf("[-] V7.3 callback sin SOF\n");
+        return -1;
+    }
+
+    if (frame[2] != REQUEST) {
+        printf("[-] V7.3 callback TYPE inesperado: 0x%02X\n",
+               frame[2]);
+        return -1;
+    }
+
+    if (frame[3] != 0x13) {
+        printf("[-] V7.3 callback FUNC_ID inesperado: 0x%02X\n",
+               frame[3]);
+        return -1;
+    }
+
+    callback_id = frame[4];
+    status = frame[5];
+
+    printf("[+] ZW_SEND_DATA callback ID : 0x%02X\n",
+           callback_id);
+
+    printf("[+] ZW_SEND_DATA TX status   : 0x%02X\n",
+           status);
+
+    if (callback_id != expected_callback_id) {
+        printf("[-] Callback ID inesperado: esperado=0x%02X recibido=0x%02X\n",
+               expected_callback_id,
+               callback_id);
+        return -1;
+    }
+
+    *tx_status = status;
+
+    /*
+     * TRANSMIT_COMPLETE_OK = 0x00
+     *
+     * En V7.3 mantenemos el valor raw además de interpretar
+     * explícitamente el caso de éxito.
+     */
+    if (status == 0x00) {
+        printf("[+] ZW_SEND_DATA TX COMPLETE : OK\n");
+        return 0;
+    }
+
+    printf("[-] ZW_SEND_DATA TX COMPLETE : fallo status=0x%02X\n",
+           status);
+
+    return 1;
+}
+
+
+
+
+/*
+ * ============================================================
+ * V7.4 - ZW_SEND_DATA CALLBACK WAIT PATH
+ * ============================================================
+ *
+ * Espera una trama Serial API y la entrega al parser V7.3.
+ *
+ * IMPORTANTE:
+ *   receive_frame() valida checksum y envia el ACK de
+ *   transporte al controlador.
+ *
+ * En esta fase la funcion NO esta cableada todavia a una
+ * transaccion ZW_SEND_DATA real.
+ */
+static int zw_send_data_wait_callback(int fd,
+                                      uint8_t expected_callback_id,
+                                      uint8_t *tx_status)
+{
+    uint8_t frame[MAX_FRAME];
+    size_t frame_len = 0;
+
+    printf("\n");
+    printf("========================================\n");
+    printf(" V7.4 WAIT ZW_SEND_DATA CALLBACK\n");
+    printf("========================================\n");
+
+    if (!tx_status) {
+        printf("[-] tx_status NULL\n");
+        return -1;
+    }
+
+    if (expected_callback_id == 0) {
+        printf("[-] expected callback ID 0 invalido\n");
+        return -1;
+    }
+
+    /*
+     * V7.10:
+     *
+     * El callback de ZW_SEND_DATA es asincrono y en hardware
+     * real puede tardar bastante mas que una RESPONSE normal.
+     *
+     * NO modificamos receive_frame(), ya que es una primitiva
+     * compartida por muchas otras rutas.
+     *
+     * Esperamos aqui hasta 30 segundos a que aparezca el primer
+     * byte del callback. Cuando el descriptor sea legible,
+     * receive_frame() conserva exactamente su comportamiento
+     * original para SOF/LENGTH/DATA/checksum/ACK.
+     */
+    printf("[+] Esperando actividad callback hasta 30000 ms\n");
+
+    {
+        int ready = wait_readable(fd, 30000);
+
+        if (ready < 0) {
+            printf("[-] Error esperando actividad callback\n");
+            return -1;
+        }
+
+        if (ready == 0) {
+            printf("[-] Timeout 30000 ms esperando callback ZW_SEND_DATA\n");
+            return -1;
+        }
+    }
+
+    printf("[+] Actividad callback detectada\n");
+
+    if (receive_frame(fd,
+                      frame,
+                      sizeof(frame),
+                      &frame_len,
+                      0) < 0) {
+        printf("[-] No se recibio callback ZW_SEND_DATA valido\n");
+        return -1;
+    }
+
+    printf("[+] Trama candidata callback recibida\n");
+
+    return zw_send_data_process_callback(frame,
+                                         frame_len,
+                                         expected_callback_id,
+                                         tx_status);
+}
+
+
+/*
+ * V7.4 OFFLINE WAIT-PATH SELFTEST
+ *
+ * socketpair() simula el enlace serie.
+ *
+ * Un extremo contiene una trama callback valida.
+ * zw_send_data_wait_callback() usa receive_frame() REAL.
+ *
+ * Verificamos tambien que receive_frame() devuelve ACK.
+ *
+ * NO abre ttyACM0.
+ * NO transmite Z-Wave.
+ */
+static int run_zw_send_data_wait_selftest(void)
+{
+    int sv[2] = {-1, -1};
+    uint8_t tx_status = 0xFF;
+    uint8_t ack = 0;
+    int rc = 1;
+
+    static const uint8_t callback_ok[] = {
+        0x01, 0x05, 0x00, 0x13, 0x01, 0x00, 0xE8
+    };
+
+    printf("\n");
+    printf("========================================\n");
+    printf(" V7.4 CALLBACK WAIT-PATH SELFTEST\n");
+    printf("========================================\n");
+    printf("[+] OFFLINE: socketpair()\n");
+    printf("[+] NO se abre ttyACM0\n");
+    printf("[+] NO se transmite Z-Wave\n");
+
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) < 0) {
+        perror("socketpair");
+        return 1;
+    }
+
+    dump_hex("SYNTH CALLBACK",
+             callback_ok,
+             sizeof(callback_ok));
+
+    if (write_all(sv[0],
+                  callback_ok,
+                  sizeof(callback_ok)) < 0) {
+        printf("[-] No se pudo inyectar callback sintetico\n");
+        goto out;
+    }
+
+    if (zw_send_data_wait_callback(sv[1],
+                                   0x01,
+                                   &tx_status) != 0) {
+        printf("[-] Wait path rechazo callback valido\n");
+        goto out;
+    }
+
+    if (tx_status != 0x00) {
+        printf("[-] TX status inesperado: 0x%02X\n",
+               tx_status);
+        goto out;
+    }
+
+    /*
+     * receive_frame() debe haber enviado ACK por sv[1].
+     * Lo leemos desde el otro extremo.
+     */
+    if (read_byte_timeout(sv[0], &ack, 500) != 1) {
+        printf("[-] No se recibio ACK de receive_frame()\n");
+        goto out;
+    }
+
+    printf("[+] ACK devuelto            : 0x%02X\n",
+           ack);
+
+    if (ack != ACK) {
+        printf("[-] Control inesperado: 0x%02X\n",
+               ack);
+        goto out;
+    }
+
+    printf("[+] Callback recibido por receive_frame REAL\n");
+    printf("[+] Parser V7.3 ejecutado correctamente\n");
+    printf("[+] ACK de transporte verificado\n");
+    printf("[+] SELFTEST WAIT-PATH V7.4 OK\n");
+
+    rc = 0;
+
+out:
+    if (sv[0] >= 0)
+        close(sv[0]);
+
+    if (sv[1] >= 0)
+        close(sv[1]);
+
+    return rc;
+}
+
+
+
+/*
+ * ============================================================
+ * V7.5 - FULL ZW_SEND_DATA TRANSACTION OFFLINE SELFTEST
+ * ============================================================
+ *
+ * Simula un controlador Serial API mediante socketpair()+fork().
+ *
+ * PADRE:
+ *   ejecuta zw_send_data_transaction() REAL
+ *   y despues zw_send_data_wait_callback() REAL.
+ *
+ * HIJO:
+ *   recibe la peticion ZW_SEND_DATA,
+ *   devuelve ACK,
+ *   devuelve RESPONSE/FUNC_ID 0x13 aceptada,
+ *   espera el ACK de receive_frame(),
+ *   envia CALLBACK REQUEST/FUNC_ID 0x13 con TX OK,
+ *   y verifica el ACK final.
+ *
+ * NO abre ttyACM0.
+ * NO transmite radio Z-Wave.
+ */
+static int run_zw_send_data_full_transaction_selftest(void)
+{
+    int sv[2] = {-1, -1};
+    pid_t pid;
+    int status = 0;
+    int rc = 1;
+
+    static const uint8_t command[] = {
+        0x84, 0x05
+    };
+
+    /*
+     * RESPONSE ZW_SEND_DATA:
+     *
+     * SOF LEN RESPONSE FUNC DATA CHECKSUM
+     *
+     * DATA = 0x01 -> accepted
+     */
+    uint8_t response[] = {
+        SOF, 0x04, RESPONSE, 0x13, 0x01, 0x00
+    };
+
+    /*
+     * CALLBACK:
+     *
+     * callback_id = 0x01
+     * tx_status   = 0x00
+     */
+    uint8_t callback[] = {
+        SOF, 0x05, REQUEST, 0x13, 0x01, 0x00, 0x00
+    };
+
+    printf("\n");
+    printf("========================================\n");
+    printf(" V7.5 FULL ZW_SEND_DATA SELFTEST\n");
+    printf("========================================\n");
+    printf("[+] OFFLINE: socketpair() + fork()\n");
+    printf("[+] NO se abre ttyACM0\n");
+    printf("[+] NO se transmite Z-Wave\n");
+
+    response[sizeof(response) - 1] =
+        zw_checksum(&response[1], response[1]);
+
+    callback[sizeof(callback) - 1] =
+        zw_checksum(&callback[1], callback[1]);
+
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) < 0) {
+        perror("socketpair");
+        return 1;
+    }
+
+    pid = fork();
+
+    if (pid < 0) {
+        perror("fork");
+        close(sv[0]);
+        close(sv[1]);
+        return 1;
+    }
+
+    if (pid == 0) {
+        uint8_t frame[MAX_FRAME];
+        uint8_t b = 0;
+        size_t pos = 0;
+        size_t total = 0;
+
+        close(sv[1]);
+
+        /*
+         * Recibir la peticion completa generada por
+         * zw_send_data_transaction().
+         *
+         * Primero SOF y LEN; despues LEN bytes restantes.
+         */
+        if (read_byte_timeout(sv[0], &frame[0], 1000) != 1 ||
+            frame[0] != SOF) {
+            printf("[-] CHILD: no recibio SOF ZW_SEND_DATA\n");
+            _exit(10);
+        }
+
+        if (read_byte_timeout(sv[0], &frame[1], 1000) != 1) {
+            printf("[-] CHILD: no recibio LEN\n");
+            _exit(11);
+        }
+
+        total = (size_t)frame[1] + 2;
+
+        if (total > sizeof(frame) || total < 5) {
+            printf("[-] CHILD: longitud invalida\n");
+            _exit(12);
+        }
+
+        pos = 2;
+
+        while (pos < total) {
+            if (read_byte_timeout(sv[0],
+                                  &frame[pos],
+                                  1000) != 1) {
+                printf("[-] CHILD: peticion incompleta\n");
+                _exit(13);
+            }
+            pos++;
+        }
+
+        dump_hex("CHILD RX ZW_SEND_DATA", frame, total);
+
+        if (frame[2] != REQUEST || frame[3] != 0x13) {
+            printf("[-] CHILD: no es ZW_SEND_DATA\n");
+            _exit(14);
+        }
+
+        /*
+         * ACK de transporte a la peticion HOST.
+         */
+        b = ACK;
+
+        if (write_all(sv[0], &b, 1) < 0)
+            _exit(15);
+
+        /*
+         * RESPONSE aceptada.
+         */
+        if (write_all(sv[0],
+                      response,
+                      sizeof(response)) < 0)
+            _exit(16);
+
+        /*
+         * El padre procesa RESPONSE mediante receive_frame(),
+         * por lo que debe devolvernos ACK.
+         */
+        if (read_byte_timeout(sv[0], &b, 1000) != 1 ||
+            b != ACK) {
+            printf("[-] CHILD: falta ACK de RESPONSE\n");
+            _exit(17);
+        }
+
+        /*
+         * Enviamos ahora el callback asincrono TX COMPLETE.
+         */
+        if (write_all(sv[0],
+                      callback,
+                      sizeof(callback)) < 0)
+            _exit(18);
+
+        /*
+         * zw_send_data_wait_callback() usa receive_frame(),
+         * que debe ACKear tambien este callback.
+         */
+        if (read_byte_timeout(sv[0], &b, 1000) != 1 ||
+            b != ACK) {
+            printf("[-] CHILD: falta ACK de CALLBACK\n");
+            _exit(19);
+        }
+
+        close(sv[0]);
+        _exit(0);
+    }
+
+    /*
+     * PADRE: ejecuta exactamente las piezas reales que
+     * posteriormente utilizaremos sobre ttyACM0.
+     */
+    close(sv[0]);
+    sv[0] = -1;
+
+    if (zw_send_data_transaction(sv[1],
+                                 2,
+                                 command,
+                                 sizeof(command),
+                                 0x25,
+                                 0x01) != 0) {
+        printf("[-] V7.5 transaction fallo\n");
+        goto parent_out;
+    }
+
+    /*
+     * V7.6:
+     *
+     * zw_send_data_transaction() ya ha consumido y
+     * validado RESPONSE + CALLBACK.
+     */
+    printf("[+] V7.6 FULL TRANSACTION aceptada\n");
+    printf("[+] V7.6 CALLBACK integrado OK\n");
+
+    rc = 0;
+
+parent_out:
+    if (sv[1] >= 0) {
+        close(sv[1]);
+        sv[1] = -1;
+    }
+
+    if (waitpid(pid, &status, 0) < 0) {
+        perror("waitpid");
+        return 1;
+    }
+
+    if (!WIFEXITED(status)) {
+        printf("[-] CHILD termino anormalmente\n");
+        return 1;
+    }
+
+    if (WEXITSTATUS(status) != 0) {
+        printf("[-] CHILD exit=%d\n",
+               WEXITSTATUS(status));
+        return 1;
+    }
+
+    if (rc != 0)
+        return 1;
+
+    printf("[+] Simulador Serial API termino correctamente\n");
+    printf("[+] ACK peticion verificado\n");
+    printf("[+] RESPONSE ZW_SEND_DATA verificada\n");
+    printf("[+] ACK RESPONSE verificado\n");
+    printf("[+] CALLBACK ZW_SEND_DATA verificado\n");
+    printf("[+] ACK CALLBACK verificado\n");
+    printf("[+] SELFTEST FULL TRANSACTION V7.5 OK\n");
+    printf("========================================\n");
+
+    return 0;
+}
+
+
+/*
+ * V7.3 ZW_SEND_DATA CALLBACK PARSER OFFLINE SELFTEST
+ *
+ * No abre ttyACM0.
+ * No transmite Z-Wave.
+ *
+ * Las tramas ya estan completas y se entregan
+ * directamente al parser V7.3.
+ */
+static int run_zw_send_data_callback_selftest(void)
+{
+    uint8_t tx_status = 0xFF;
+    int rc;
+
+    /*
+     * REQUEST / FUNC_ID 0x13
+     * callback_id = 0x01
+     * tx_status   = 0x00
+     *
+     * LENGTH = TYPE + FUNC + DATA(2) + CHECKSUM = 5
+     */
+    uint8_t ok_frame[] = {
+        SOF, 0x05, REQUEST, 0x13, 0x01, 0x00, 0x00
+    };
+
+    uint8_t bad_id_frame[] = {
+        SOF, 0x05, REQUEST, 0x13, 0x02, 0x00, 0x00
+    };
+
+    uint8_t failed_tx_frame[] = {
+        SOF, 0x05, REQUEST, 0x13, 0x01, 0x01, 0x00
+    };
+
+    /*
+     * El parser actual no recalcula checksum porque recibe
+     * una trama que conceptualmente ya ha pasado por
+     * receive_frame(). Aun asi dejamos checksum correcto
+     * para que las muestras sean tramas Serial API validas.
+     */
+    ok_frame[6] =
+        zw_checksum(&ok_frame[1], sizeof(ok_frame) - 2);
+
+    bad_id_frame[6] =
+        zw_checksum(&bad_id_frame[1],
+                    sizeof(bad_id_frame) - 2);
+
+    failed_tx_frame[6] =
+        zw_checksum(&failed_tx_frame[1],
+                    sizeof(failed_tx_frame) - 2);
+
+    printf("\n");
+    printf("========================================\n");
+    printf(" V7.3 ZW_SEND_DATA CALLBACK SELFTEST\n");
+    printf("========================================\n");
+    printf("[+] OFFLINE: no se abre ttyACM0\n");
+    printf("[+] OFFLINE: no se transmite Z-Wave\n");
+
+    /*
+     * TEST 1:
+     * callback correcto y TRANSMIT_COMPLETE_OK.
+     */
+    printf("\n[TEST 1] CALLBACK correcto / TX OK\n");
+
+    dump_hex("SYNTH CALLBACK",
+             ok_frame,
+             sizeof(ok_frame));
+
+    tx_status = 0xFF;
+
+    rc = zw_send_data_process_callback(
+            ok_frame,
+            sizeof(ok_frame),
+            0x01,
+            &tx_status);
+
+    if (rc != 0) {
+        printf("[-] TEST 1 esperaba rc=0, recibido=%d\n",
+               rc);
+        return 1;
+    }
+
+    if (tx_status != 0x00) {
+        printf("[-] TEST 1 tx_status inesperado: 0x%02X\n",
+               tx_status);
+        return 1;
+    }
+
+    printf("[+] TEST 1 OK\n");
+
+    /*
+     * TEST 2:
+     * callback perteneciente a otra transaccion.
+     */
+    printf("\n[TEST 2] CALLBACK ID incorrecto\n");
+
+    dump_hex("SYNTH CALLBACK",
+             bad_id_frame,
+             sizeof(bad_id_frame));
+
+    tx_status = 0xFF;
+
+    rc = zw_send_data_process_callback(
+            bad_id_frame,
+            sizeof(bad_id_frame),
+            0x01,
+            &tx_status);
+
+    if (rc >= 0) {
+        printf("[-] TEST 2 esperaba rechazo por Callback ID\n");
+        return 1;
+    }
+
+    printf("[+] TEST 2 rechazado correctamente\n");
+
+    /*
+     * TEST 3:
+     * callback correcto pero transmision fallida.
+     */
+    printf("\n[TEST 3] CALLBACK correcto / TX FAIL\n");
+
+    dump_hex("SYNTH CALLBACK",
+             failed_tx_frame,
+             sizeof(failed_tx_frame));
+
+    tx_status = 0xFF;
+
+    rc = zw_send_data_process_callback(
+            failed_tx_frame,
+            sizeof(failed_tx_frame),
+            0x01,
+            &tx_status);
+
+    if (rc != 1) {
+        printf("[-] TEST 3 esperaba rc=1, recibido=%d\n",
+               rc);
+        return 1;
+    }
+
+    if (tx_status != 0x01) {
+        printf("[-] TEST 3 tx_status inesperado: 0x%02X\n",
+               tx_status);
+        return 1;
+    }
+
+    printf("[+] TEST 3 fallo TX detectado correctamente\n");
+
+    printf("\n");
+    printf("[+] SELFTEST CALLBACK V7.3 OK\n");
+    printf("========================================\n");
+
+    return 0;
+}
+
+
+/*
+ * V7.2 OFFLINE TRANSACTION CORE SELFTEST
+ *
+ * Invoca zw_send_data_transaction() exclusivamente
+ * con argumentos invalidos.
+ *
+ * Todas las rutas deben terminar ANTES de write_all().
+ * fd=-1 nunca debe utilizarse.
+ */
+static int run_zw_send_data_transaction_selftest(void)
+{
+    static const uint8_t command[] = {
+        0x84, 0x05
+    };
+
+    int rc;
+
+    printf("\n");
+    printf("========================================\n");
+    printf(" V7.2 TRANSACTION CORE OFFLINE SELFTEST\n");
+    printf("========================================\n");
+    printf("[+] NO se abre ttyACM0\n");
+    printf("[+] NO se transmite Z-Wave\n");
+
+    printf("\n[TEST 1] Node ID = 0\n");
+
+    rc = zw_send_data_transaction(-1,
+                                  0,
+                                  command,
+                                  sizeof(command),
+                                  0x25,
+                                  0x01);
+
+    if (rc == 0) {
+        printf("[-] Node 0 fue aceptado inesperadamente\n");
+        return 1;
+    }
+
+    printf("[+] Node 0 rechazado correctamente\n");
+
+    printf("\n[TEST 2] Command NULL\n");
+
+    rc = zw_send_data_transaction(-1,
+                                  2,
+                                  NULL,
+                                  0,
+                                  0x25,
+                                  0x01);
+
+    if (rc == 0) {
+        printf("[-] Command NULL fue aceptado\n");
+        return 1;
+    }
+
+    printf("[+] Command NULL rechazado correctamente\n");
+
+    printf("\n[TEST 3] Callback ID = 0\n");
+
+    rc = zw_send_data_transaction(-1,
+                                  2,
+                                  command,
+                                  sizeof(command),
+                                  0x25,
+                                  0x00);
+
+    if (rc == 0) {
+        printf("[-] Callback 0 fue aceptado\n");
+        return 1;
+    }
+
+    printf("[+] Callback 0 rechazado correctamente\n");
+
+    printf("\n");
+    printf("[+] Todas las rutas terminaron antes de TX\n");
+    printf("[+] SELFTEST V7.2 OK\n");
+    printf("========================================\n");
+
+    return 0;
+}
+
+
+static int run_passive_listener(int fd)
+{
+    uint8_t frame[MAX_FRAME];
+    size_t frame_len;
+    unsigned int frames = 0;
+    unsigned int app_commands = 0;
+
+    printf("\n");
+    printf("========================================\n");
+    printf(" V7.0 PASSIVE SERIAL API LISTENER\n");
+    printf("========================================\n");
+    printf("[+] SOLO RECEPCION de eventos Serial API\n");
+    printf("[+] NO ZW_SEND_DATA\n");
+    printf("[+] NO inclusion/exclusion\n");
+    printf("[+] Ctrl-C para terminar\n");
+    printf("\n");
+    printf("[+] Manipula ahora el dispositivo Z-Wave.\n");
+    printf("[+] Para DCH-Z110: abre/cierra el contacto,\n");
+    printf("[+] pulsa tamper, etc.\n");
+
+    for (;;) {
+        int r;
+
+        printf("\n");
+        printf("----- ESPERANDO EVENTO %u -----\n",
+               frames + 1);
+
+        r = receive_frame(fd,
+                          frame,
+                          sizeof(frame),
+                          &frame_len,
+                          0);
+
+        if (r < 0) {
+            /*
+             * receive_frame() tiene timeout finito.
+             * En modo listener no lo consideramos fatal:
+             * seguimos escuchando.
+             */
+            continue;
+        }
+
+        frames++;
+
+        if (frame_len < 5) {
+            printf("[!] trama demasiado corta\n");
+            continue;
+        }
+
+        printf("[+] Serial API TYPE        : 0x%02X (%s)\n",
+               frame[2],
+               frame[2] == REQUEST ? "REQUEST" :
+               frame[2] == RESPONSE ? "RESPONSE" :
+                                      "UNKNOWN");
+
+        printf("[+] Serial API FUNC_ID     : 0x%02X\n",
+               frame[3]);
+
+        if (frame[2] == REQUEST &&
+            frame[3] == 0x04) {
+
+            app_commands++;
+
+            printf("\n");
+            printf(">>> APPLICATION COMMAND #%u <<<\n",
+                   app_commands);
+
+            decode_application_command_handler(frame,
+                                               frame_len);
+        } else {
+            printf("[+] Evento Serial API no decodificado\n");
+        }
+
+        printf("[+] Frames recibidos       : %u\n",
+               frames);
+        printf("[+] Application commands   : %u\n",
+               app_commands);
+    }
+
+    /* No alcanzable normalmente: salida mediante Ctrl-C. */
+    return 0;
+}
+
+
+
+/*
+ * ============================================================
+ * V7.7 - REAL ZW_SEND_DATA ARMED DRY-RUN
+ * ============================================================
+ *
+ * Prepara exactamente la primera operacion Z-Wave real que
+ * queremos realizar, pero DELIBERADAMENTE NO llama a
+ * zw_send_data_transaction().
+ *
+ * No abre ttyACM0.
+ * No transmite ningun byte.
+ *
+ * Parametros bloqueados:
+ *
+ *   Node ID     = 2
+ *   Command     = 84 05
+ *   TX options  = 25
+ *   Callback ID = 01
+ */
+static int run_zw_send_data_real_armed_dry_run(void)
+{
+    static const uint8_t command[] = {
+        0x84, 0x05
+    };
+
+    uint8_t frame[MAX_FRAME];
+    size_t frame_len = 0;
+
+    const uint8_t node_id = 2;
+    const uint8_t tx_options = 0x25;
+    const uint8_t callback_id = 0x01;
+
+    printf("\n");
+    printf("========================================\n");
+    printf(" V7.7 REAL ZW_SEND_DATA — ARMED DRY-RUN\n");
+    printf("========================================\n");
+
+    printf("[+] ARMED pero TRANSMISION BLOQUEADA\n");
+    printf("[+] NO se abre ttyACM0\n");
+    printf("[+] NO se transmite Z-Wave\n");
+
+    printf("\n");
+    printf("[+] Node ID                : %u (0x%02X)\n",
+           node_id,
+           node_id);
+
+    dump_hex("Z-Wave command",
+             command,
+             sizeof(command));
+
+    printf("[+] TX options             : 0x%02X\n",
+           tx_options);
+
+    printf("[+] Callback ID            : 0x%02X\n",
+           callback_id);
+
+    if (build_zw_send_data_frame(node_id,
+                                 command,
+                                 sizeof(command),
+                                 tx_options,
+                                 callback_id,
+                                 frame,
+                                 sizeof(frame),
+                                 &frame_len) < 0) {
+        printf("[-] No se pudo construir frame V7.7\n");
+        return 1;
+    }
+
+    dump_hex("ARMED TX FRAME",
+             frame,
+             frame_len);
+
+    /*
+     * Primera operacion prevista:
+     *
+     * 01 09 00 13 02 02 84 05 25 01 40
+     */
+    static const uint8_t expected[] = {
+        0x01, 0x09, 0x00, 0x13,
+        0x02, 0x02, 0x84, 0x05,
+        0x25, 0x01, 0x40
+    };
+
+    if (frame_len != sizeof(expected) ||
+        memcmp(frame, expected, sizeof(expected)) != 0) {
+        printf("[-] FRAME V7.7 NO coincide con golden frame\n");
+        return 1;
+    }
+
+    printf("[+] Golden frame verificado byte a byte\n");
+
+    printf("\n");
+    printf("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
+    printf(" TRANSMISION REAL BLOQUEADA EN V7.7\n");
+    printf(" NO se ha llamado zw_send_data_transaction()\n");
+    printf("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
+
+    printf("[+] V7.7 ARMED DRY-RUN OK\n");
+
+    return 0;
+}
+
+
 static void usage(const char *prog)
 {
     fprintf(stderr,
@@ -3187,7 +4780,14 @@ static void usage(const char *prog)
         "--add-node-pipeline-selftest|--add-node-rx-selftest|"
         "--add-node-loop-selftest|"
         "--add-node-transaction-selftest|"
-        "--add-node-failure-selftest|--add-node-real] [dispositivo]\n",
+        "--add-node-failure-selftest|--add-node-real|"
+        "--listen|--send-data-selftest|"
+        "--send-data-transaction-selftest|"
+        "--send-data-callback-selftest|"
+        "--send-data-wait-selftest|"
+        "--send-data-full-selftest|"
+        "--send-data-real-armed|"
+        "--send-data-real NODE] [dispositivo]\n",
         prog);
 }
 
@@ -3236,6 +4836,42 @@ int main(int argc, char **argv)
             mode = 17;
         else if (!strcmp(argv[1], "--add-node-real"))
             mode = 18;
+        else if (!strcmp(argv[1], "--listen"))
+            mode = 19;
+        else if (!strcmp(argv[1], "--send-data-selftest"))
+            mode = 20;
+        else if (!strcmp(argv[1], "--send-data-transaction-selftest"))
+            mode = 21;
+        else if (!strcmp(argv[1], "--send-data-callback-selftest"))
+            mode = 22;
+        else if (!strcmp(argv[1], "--send-data-wait-selftest"))
+            mode = 23;
+        else if (!strcmp(argv[1], "--send-data-full-selftest"))
+            mode = 24;
+        else if (!strcmp(argv[1], "--send-data-real-armed"))
+            mode = 25;
+        else if (!strcmp(argv[1], "--send-data-real")) {
+            char *endp;
+
+            if (argc < 3) {
+                fprintf(stderr,
+                        "ERROR: --send-data-real necesita NODE (1..232)\n");
+                return 1;
+            }
+
+            node_id = strtoul(argv[2], &endp, 0);
+
+            if (*endp != '\0' ||
+                node_id < 1 ||
+                node_id > 232) {
+                fprintf(stderr,
+                        "ERROR: NODE invalido: %s\n",
+                        argv[2]);
+                return 1;
+            }
+
+            mode = 26;
+        }
         else if (!strcmp(argv[1], "--node-info")) {
             char *endp;
 
@@ -3264,7 +4900,20 @@ int main(int argc, char **argv)
         }
     }
 
-    if (mode == 8) {
+    /*
+     * Modos con argumento NODE:
+     *
+     *   argv[2] = NODE
+     *   argv[3] = dispositivo opcional
+     *
+     * mode 8  = ZW_GET_NODE_PROTOCOL_INFO
+     * mode 26 = ZW_SEND_DATA_REAL
+     *
+     * Para el resto:
+     *
+     *   argv[2] = dispositivo opcional
+     */
+    if (mode == 8 || mode == 26) {
         if (argc >= 4)
             dev = argv[3];
     } else {
@@ -3295,9 +4944,95 @@ int main(int argc, char **argv)
            mode == 16 ? "ADD_NODE_TRANSACTION_SELFTEST" :
            mode == 17 ? "ADD_NODE_FAILURE_SELFTEST" :
            mode == 18 ? "ADD_NODE_REAL" :
+           mode == 19 ? "PASSIVE_SERIAL_API_LISTENER" :
+           mode == 20 ? "ZW_SEND_DATA_OFFLINE_SELFTEST" :
+           mode == 21 ? "ZW_SEND_DATA_TRANSACTION_SELFTEST" :
+           mode == 22 ? "ZW_SEND_DATA_CALLBACK_SELFTEST" :
+           mode == 23 ? "ZW_SEND_DATA_WAIT_SELFTEST" :
+           mode == 24 ? "ZW_SEND_DATA_FULL_SELFTEST" :
+           mode == 25 ? "ZW_SEND_DATA_REAL_ARMED_DRY_RUN" :
+           mode == 26 ? "ZW_SEND_DATA_REAL" :
                         "PREPARE_ONLY");
 
     printf("========================================\n");
+
+    /*
+     * V7.1 ZW_SEND_DATA SELFTEST.
+     *
+     * Deliberadamente antes de setup_serial():
+     * garantiza que el test NO abre el puerto real.
+     */
+    if (mode == 20) {
+        rc = run_zw_send_data_selftest();
+
+        printf("\n[+] resultado: %s\n",
+               rc ? "ERROR" : "OK");
+
+        return rc;
+    }
+
+    /*
+     * V7.2 ZW_SEND_DATA TRANSACTION SELFTEST.
+     *
+     * Deliberadamente antes de setup_serial():
+     * no abre ttyACM0 y no transmite nada.
+     */
+    if (mode == 21) {
+        rc = run_zw_send_data_transaction_selftest();
+
+        printf("\n[+] resultado: %s\n",
+               rc ? "ERROR" : "OK");
+
+        return rc;
+    }
+
+    /*
+     * V7.5 FULL ZW_SEND_DATA TRANSACTION SELFTEST.
+     *
+     * Deliberadamente antes de setup_serial():
+     * usa socketpair(), no ttyACM0.
+     *
+     * Simula el flujo completo:
+     * REQUEST -> ACK -> RESPONSE -> CALLBACK.
+     */
+    if (mode == 24) {
+        rc = run_zw_send_data_full_transaction_selftest();
+
+        printf("\n[+] resultado: %s\n",
+               rc ? "ERROR" : "OK");
+
+        return rc;
+    }
+
+    /*
+     * V7.4 ZW_SEND_DATA WAIT-PATH SELFTEST.
+     *
+     * Deliberadamente antes de setup_serial():
+     * usa socketpair(), no ttyACM0.
+     */
+    if (mode == 23) {
+        rc = run_zw_send_data_wait_selftest();
+
+        printf("\n[+] resultado: %s\n",
+               rc ? "ERROR" : "OK");
+
+        return rc;
+    }
+
+    /*
+     * V7.3 ZW_SEND_DATA CALLBACK SELFTEST.
+     *
+     * Deliberadamente antes de setup_serial():
+     * no abre ttyACM0 y no transmite Z-Wave.
+     */
+    if (mode == 22) {
+        rc = run_zw_send_data_callback_selftest();
+
+        printf("\n[+] resultado: %s\n",
+               rc ? "ERROR" : "OK");
+
+        return rc;
+    }
 
     /*
      * DRY RUN deliberadamente antes de setup_serial().
@@ -3377,10 +5112,135 @@ int main(int argc, char **argv)
         return rc;
     }
 
+
+    /*
+     * V7.7 REAL SEND_DATA ARMED DRY-RUN.
+     *
+     * Deliberadamente ANTES de setup_serial().
+     * Comprueba exactamente lo que transmitiríamos,
+     * pero no abre ttyACM0 ni llama a la transaction.
+     */
+    if (mode == 25) {
+        rc = run_zw_send_data_real_armed_dry_run();
+
+        printf("\n[+] resultado: %s\n",
+               rc ? "ERROR" : "OK");
+
+        return rc;
+    }
+
     fd = setup_serial(dev);
 
     if (fd < 0)
         return 1;
+
+    /*
+     * ========================================================
+     * V7.8 STAGE 1 - REAL ZW_SEND_DATA PATH
+     * ========================================================
+     *
+     * El modo REAL ya ha atravesado:
+     *
+     *   parser CLI
+     *       ->
+     *   validacion NODE
+     *       ->
+     *   setup_serial()
+     *
+     * PERO EN STAGE 1 LA TRANSMISION SIGUE BLOQUEADA.
+     *
+     * Todavia NO llamamos zw_send_data_transaction().
+     */
+    if (mode == 26) {
+        printf("\n");
+        printf("========================================\n");
+        printf(" V7.8 REAL ZW_SEND_DATA — STAGE 1\n");
+        printf("========================================\n");
+
+        printf("[+] ttyACM0 abierto/configurado\n");
+        printf("[+] Node ID validado         : %lu (0x%02lX)\n",
+               node_id,
+               node_id);
+
+        printf("[+] Command previsto         : 84 05\n");
+        printf("[+] TX options previstas     : 0x25\n");
+        printf("[+] Callback ID previsto     : 0x01\n");
+
+        /*
+         * V7.9 - PRIMER ZW_SEND_DATA REAL
+         *
+         * Parametros previamente validados:
+         *
+         *   NODE        = node_id
+         *   COMMAND     = 84 05
+         *   TX OPTIONS  = 0x25
+         *   CALLBACK ID = 0x01
+         *
+         * zw_send_data_transaction() realiza la cadena completa:
+         *
+         *   REQUEST -> ACK -> RESPONSE -> CALLBACK
+         *
+         * y solo devuelve 0 si termina con
+         * TRANSMIT_COMPLETE_OK.
+         */
+        {
+            static const uint8_t command[] = {
+                0x84, 0x05
+            };
+
+            printf("\n");
+            printf("========================================\n");
+            printf(" V7.9 — PRIMER ZW_SEND_DATA REAL\n");
+            printf("========================================\n");
+
+            printf("[!] A PARTIR DE AQUI HAY TRANSMISION REAL\n");
+            printf("[+] Node ID                : %lu (0x%02lX)\n",
+                   node_id,
+                   node_id);
+            printf("[+] Command                : 84 05\n");
+            printf("[+] TX options             : 0x25\n");
+            printf("[+] Callback ID            : 0x01\n");
+
+            rc = zw_send_data_transaction(fd,
+                                          (uint8_t)node_id,
+                                          command,
+                                          sizeof(command),
+                                          0x25,
+                                          0x01);
+
+            close(fd);
+
+            printf("\n[+] puerto cerrado\n");
+
+            if (rc != 0) {
+                printf("[-] V7.9 ZW_SEND_DATA REAL fallo: rc=%d\n",
+                       rc);
+                printf("[+] resultado: ERROR\n");
+                return 1;
+            }
+
+            printf("[+] V7.9 ZW_SEND_DATA REAL completado\n");
+            printf("[+] resultado: OK\n");
+
+            return 0;
+        }
+    }
+
+    /*
+     * V7.0 listener pasivo.
+     * El puerto ya esta abierto/configurado.
+     */
+    if (mode == 19) {
+        rc = run_passive_listener(fd);
+
+        close(fd);
+
+        printf("\n[+] puerto cerrado\n");
+        printf("[+] resultado: %s\n",
+               rc ? "ERROR" : "OK");
+
+        return rc;
+    }
 
     if (mode == 18) {
         rc = run_add_node_real(fd);
