@@ -4767,6 +4767,767 @@ static int run_zw_send_data_real_armed_dry_run(void)
 }
 
 
+
+/*
+ * V7.12 - OEM CMDQ ENTRY MODEL
+ *
+ * Reconstruido a partir del zw_center OEM:
+ *
+ *   byte 0     = longitud del comando Z-Wave
+ *   byte 1     = Command Class
+ *   byte 2     = Command
+ *   byte 3...  = payload
+ *
+ * cmdq_add()/cmdq_remove() copian exactamente 33 bytes.
+ *
+ * ESTE BLOQUE ES PURAMENTE OFFLINE.
+ * NO abre ttyACM0.
+ * NO ejecuta ZW_SEND_DATA.
+ */
+
+#define OEM_CMDQ_ENTRY_SIZE       33U
+#define OEM_CMDQ_COMMAND_MAX      32U
+
+struct oem_cmdq_entry {
+    uint8_t len;
+    uint8_t command[OEM_CMDQ_COMMAND_MAX];
+};
+
+static int oem_cmdq_entry_build(struct oem_cmdq_entry *entry,
+                                const uint8_t *command,
+                                size_t command_len)
+{
+    if (entry == NULL || command == NULL)
+        return -1;
+
+    if (command_len == 0 || command_len > OEM_CMDQ_COMMAND_MAX)
+        return -1;
+
+    memset(entry, 0, sizeof(*entry));
+
+    entry->len = (uint8_t)command_len;
+    memcpy(entry->command, command, command_len);
+
+    return 0;
+}
+
+static int run_oem_cmdq_model_selftest(void)
+{
+    struct oem_cmdq_entry entry;
+
+    static const uint8_t wake_up_no_more_information[] = {
+        0x84, 0x08
+    };
+
+    static const uint8_t expected_prefix[] = {
+        0x02, 0x84, 0x08
+    };
+
+    const uint8_t *raw = (const uint8_t *)&entry;
+
+    printf("========================================\n");
+    printf(" V7.12 OEM CMDQ MODEL SELFTEST\n");
+    printf("========================================\n");
+    printf("[+] OFFLINE ONLY\n");
+    printf("[+] NO ttyACM0\n");
+    printf("[+] NO Serial API\n");
+    printf("[+] NO ZW_SEND_DATA\n");
+    printf("\n");
+
+    printf("[+] sizeof(oem_cmdq_entry) : %zu\n",
+           sizeof(entry));
+
+    if (sizeof(entry) != OEM_CMDQ_ENTRY_SIZE) {
+        printf("[-] Tamano CMDQ inesperado: %zu\n",
+               sizeof(entry));
+        return -1;
+    }
+
+    if (oem_cmdq_entry_build(
+            &entry,
+            wake_up_no_more_information,
+            sizeof(wake_up_no_more_information)) < 0) {
+        printf("[-] No se pudo construir CMDQ entry\n");
+        return -1;
+    }
+
+    dump_hex("OEM CMDQ ENTRY", raw, sizeof(entry));
+
+    printf("[+] entry[0] length        : %u\n", raw[0]);
+    printf("[+] entry[1] Command Class : 0x%02X\n", raw[1]);
+    printf("[+] entry[2] Command       : 0x%02X\n", raw[2]);
+
+    if (memcmp(raw,
+               expected_prefix,
+               sizeof(expected_prefix)) != 0) {
+        printf("[-] Prefix OEM CMDQ incorrecto\n");
+        return -1;
+    }
+
+    for (size_t i = sizeof(expected_prefix);
+         i < sizeof(entry);
+         ++i) {
+        if (raw[i] != 0) {
+            printf("[-] Padding no nulo en offset %zu: 0x%02X\n",
+                   i, raw[i]);
+            return -1;
+        }
+    }
+
+    /*
+     * Pruebas negativas.
+     */
+    if (oem_cmdq_entry_build(&entry,
+                             wake_up_no_more_information,
+                             0) == 0) {
+        printf("[-] Se acepto longitud cero\n");
+        return -1;
+    }
+
+    {
+        uint8_t oversized[OEM_CMDQ_COMMAND_MAX + 1];
+
+        memset(oversized, 0xAA, sizeof(oversized));
+
+        if (oem_cmdq_entry_build(&entry,
+                                 oversized,
+                                 sizeof(oversized)) == 0) {
+            printf("[-] Se acepto comando >32 bytes\n");
+            return -1;
+        }
+    }
+
+    printf("[+] Layout 33 bytes verificado\n");
+    printf("[+] length + command verificados\n");
+    printf("[+] padding verificado\n");
+    printf("[+] limites verificados\n");
+    printf("[+] OEM CMDQ MODEL SELFTEST OK\n");
+    printf("========================================\n");
+
+    return 0;
+}
+
+
+/*
+ * V7.12 STAGE 2B - OEM WAKE-UP DECISION MODEL
+ *
+ * Modelo PURAMENTE OFFLINE.
+ *
+ * NO abre ttyACM0.
+ * NO usa Serial API.
+ * NO ejecuta ZW_SEND_DATA.
+ */
+
+enum oem_wakeup_action {
+    OEM_WAKEUP_ACTION_NONE = 0,
+    OEM_WAKEUP_ACTION_SEND = 1
+};
+
+static int oem_wakeup_decide(uint8_t event_node,
+                             uint8_t expected_node,
+                             const uint8_t *event,
+                             size_t event_len,
+                             const struct oem_cmdq_entry *entry,
+                             enum oem_wakeup_action *action)
+{
+    if (action == NULL)
+        return -1;
+
+    *action = OEM_WAKEUP_ACTION_NONE;
+
+    if (event == NULL || event_len != 2)
+        return -1;
+
+    if (event_node == 0 || event_node > 232)
+        return -1;
+
+    if (expected_node == 0 || expected_node > 232)
+        return -1;
+
+    /*
+     * Evento procedente de otro nodo.
+     */
+    if (event_node != expected_node)
+        return 0;
+
+    /*
+     * Solo:
+     *
+     *   COMMAND_CLASS_WAKE_UP = 0x84
+     *   WAKE_UP_NOTIFICATION  = 0x07
+     */
+    if (event[0] != 0x84 || event[1] != 0x07)
+        return 0;
+
+    /*
+     * CMDQ vacia.
+     */
+    if (entry == NULL || entry->len == 0)
+        return 0;
+
+    if (entry->len > OEM_CMDQ_COMMAND_MAX)
+        return -1;
+
+    *action = OEM_WAKEUP_ACTION_SEND;
+
+    return 0;
+}
+
+
+static int run_oem_wakeup_decision_selftest(void)
+{
+    static const uint8_t wake_notification[] = {
+        0x84, 0x07
+    };
+
+    static const uint8_t wake_no_more_information[] = {
+        0x84, 0x08
+    };
+
+    static const uint8_t battery_get[] = {
+        0x80, 0x02
+    };
+
+    struct oem_cmdq_entry entry;
+    enum oem_wakeup_action action;
+    int rc;
+
+    printf("========================================\n");
+    printf(" V7.12 OEM WAKE-UP DECISION SELFTEST\n");
+    printf("========================================\n");
+    printf("[+] OFFLINE ONLY\n");
+    printf("[+] NO ttyACM0\n");
+    printf("[+] NO Serial API\n");
+    printf("[+] NO ZW_SEND_DATA\n");
+    printf("\n");
+
+    /*
+     * TEST 1
+     * NODE 4 despierta y CMDQ contiene 84 08.
+     */
+    if (oem_cmdq_entry_build(
+            &entry,
+            wake_no_more_information,
+            sizeof(wake_no_more_information)) < 0) {
+        printf("[-] TEST1 build fallo\n");
+        return -1;
+    }
+
+    rc = oem_wakeup_decide(
+        4, 4,
+        wake_notification,
+        sizeof(wake_notification),
+        &entry,
+        &action);
+
+    printf("[TEST1] NODE4 + 84 07 + CMDQ 84 08 -> ");
+
+    if (rc != 0 || action != OEM_WAKEUP_ACTION_SEND) {
+        printf("FAIL\n");
+        return -1;
+    }
+
+    printf("SEND [OK]\n");
+
+
+    /*
+     * TEST 2
+     * CMDQ vacia.
+     */
+    memset(&entry, 0, sizeof(entry));
+
+    rc = oem_wakeup_decide(
+        4, 4,
+        wake_notification,
+        sizeof(wake_notification),
+        &entry,
+        &action);
+
+    printf("[TEST2] NODE4 + CMDQ vacia          -> ");
+
+    if (rc != 0 || action != OEM_WAKEUP_ACTION_NONE) {
+        printf("FAIL\n");
+        return -1;
+    }
+
+    printf("NONE [OK]\n");
+
+
+    /*
+     * TEST 3
+     * Evento procedente de otro nodo.
+     */
+    if (oem_cmdq_entry_build(
+            &entry,
+            wake_no_more_information,
+            sizeof(wake_no_more_information)) < 0)
+        return -1;
+
+    rc = oem_wakeup_decide(
+        3, 4,
+        wake_notification,
+        sizeof(wake_notification),
+        &entry,
+        &action);
+
+    printf("[TEST3] NODE3 != NODE4              -> ");
+
+    if (rc != 0 || action != OEM_WAKEUP_ACTION_NONE) {
+        printf("FAIL\n");
+        return -1;
+    }
+
+    printf("NONE [OK]\n");
+
+
+    /*
+     * TEST 4
+     * RX 84 08 no es WAKE_UP_NOTIFICATION.
+     */
+    rc = oem_wakeup_decide(
+        4, 4,
+        wake_no_more_information,
+        sizeof(wake_no_more_information),
+        &entry,
+        &action);
+
+    printf("[TEST4] RX 84 08                    -> ");
+
+    if (rc != 0 || action != OEM_WAKEUP_ACTION_NONE) {
+        printf("FAIL\n");
+        return -1;
+    }
+
+    printf("NONE [OK]\n");
+
+
+    /*
+     * TEST 5
+     * Cualquier comando valido pendiente debe producir SEND.
+     */
+    if (oem_cmdq_entry_build(
+            &entry,
+            battery_get,
+            sizeof(battery_get)) < 0)
+        return -1;
+
+    rc = oem_wakeup_decide(
+        4, 4,
+        wake_notification,
+        sizeof(wake_notification),
+        &entry,
+        &action);
+
+    printf("[TEST5] NODE4 + CMDQ 80 02           -> ");
+
+    if (rc != 0 || action != OEM_WAKEUP_ACTION_SEND) {
+        printf("FAIL\n");
+        return -1;
+    }
+
+    printf("SEND [OK]\n");
+
+
+    /*
+     * TEST 6
+     * Longitud CMDQ corrupta.
+     */
+    memset(&entry, 0, sizeof(entry));
+    entry.len = OEM_CMDQ_COMMAND_MAX + 1;
+
+    rc = oem_wakeup_decide(
+        4, 4,
+        wake_notification,
+        sizeof(wake_notification),
+        &entry,
+        &action);
+
+    printf("[TEST6] CMDQ length > 32             -> ");
+
+    if (rc == 0) {
+        printf("FAIL\n");
+        return -1;
+    }
+
+    printf("REJECT [OK]\n");
+
+
+    /*
+     * TEST 7
+     * Evento wake-up truncado.
+     */
+    rc = oem_wakeup_decide(
+        4, 4,
+        wake_notification,
+        1,
+        &entry,
+        &action);
+
+    printf("[TEST7] WAKE event truncado          -> ");
+
+    if (rc == 0) {
+        printf("FAIL\n");
+        return -1;
+    }
+
+    printf("REJECT [OK]\n");
+
+    printf("\n");
+    printf("[+] OEM WAKE-UP DECISION MODEL OK\n");
+    printf("[+] NINGUNA TRANSMISION REAL EJECUTADA\n");
+    printf("========================================\n");
+
+    return 0;
+}
+
+
+
+/*
+ * V7.12 STAGE 3 - OEM WAKE-UP PIPELINE OFFLINE
+ *
+ * Integra:
+ *
+ *   CMDQ entry
+ *        +
+ *   WAKE_UP_NOTIFICATION
+ *        +
+ *   decision SEND/NONE
+ *        +
+ *   extraccion del comando pendiente
+ *
+ * El resultado queda preparado para entregarse al transporte
+ * ZW_SEND_DATA ya validado por run_send_data_full_selftest().
+ *
+ * NO abre ttyACM0.
+ * NO transmite Z-Wave.
+ */
+
+struct oem_wakeup_pipeline_result {
+    enum oem_wakeup_action action;
+    uint8_t node_id;
+    uint8_t command_len;
+    uint8_t command[OEM_CMDQ_COMMAND_MAX];
+};
+
+static int oem_wakeup_pipeline_run(
+        uint8_t event_node,
+        uint8_t expected_node,
+        const uint8_t *event,
+        size_t event_len,
+        struct oem_cmdq_entry *entry,
+        struct oem_wakeup_pipeline_result *result)
+{
+    enum oem_wakeup_action action;
+    int rc;
+
+    if (result == NULL)
+        return -1;
+
+    memset(result, 0, sizeof(*result));
+
+    rc = oem_wakeup_decide(
+        event_node,
+        expected_node,
+        event,
+        event_len,
+        entry,
+        &action);
+
+    if (rc != 0)
+        return -1;
+
+    result->action = action;
+
+    if (action == OEM_WAKEUP_ACTION_NONE)
+        return 0;
+
+    if (entry == NULL)
+        return -1;
+
+    if (entry->len == 0 ||
+        entry->len > OEM_CMDQ_COMMAND_MAX)
+        return -1;
+
+    result->node_id = expected_node;
+    result->command_len = entry->len;
+
+    memcpy(result->command,
+           entry->command,
+           entry->len);
+
+    /*
+     * Modelo de dequeue:
+     *
+     * una vez extraido el comando para envio,
+     * la entrada queda vacia.
+     */
+    memset(entry, 0, sizeof(*entry));
+
+    return 0;
+}
+
+
+static int run_oem_wakeup_pipeline_selftest(void)
+{
+    static const uint8_t wake_notification[] = {
+        0x84, 0x07
+    };
+
+    static const uint8_t wake_no_more_information[] = {
+        0x84, 0x08
+    };
+
+    static const uint8_t battery_get[] = {
+        0x80, 0x02
+    };
+
+    struct oem_cmdq_entry entry;
+    struct oem_wakeup_pipeline_result result;
+    int rc;
+
+    printf("========================================\n");
+    printf(" V7.12 OEM WAKE-UP PIPELINE SELFTEST\n");
+    printf("========================================\n");
+    printf("[+] OFFLINE ONLY\n");
+    printf("[+] NO ttyACM0\n");
+    printf("[+] NO Serial API REAL\n");
+    printf("[+] NO Z-WAVE REAL\n");
+    printf("\n");
+
+
+    /*
+     * TEST 1
+     *
+     * CMDQ:
+     *      84 08
+     *
+     * RX:
+     *      NODE 4 / 84 07
+     *
+     * Esperado:
+     *      SEND NODE 4 / 84 08
+     *      CMDQ vacia despues del dequeue.
+     */
+    if (oem_cmdq_entry_build(
+            &entry,
+            wake_no_more_information,
+            sizeof(wake_no_more_information)) != 0) {
+        printf("[-] TEST1 build fallo\n");
+        return -1;
+    }
+
+    printf("[TEST1] ENQUEUE CMDQ             : ");
+    printf("%02X %02X\n",
+           entry.command[0],
+           entry.command[1]);
+
+    rc = oem_wakeup_pipeline_run(
+        4,
+        4,
+        wake_notification,
+        sizeof(wake_notification),
+        &entry,
+        &result);
+
+    printf("[TEST1] RX                      : NODE 4 / 84 07\n");
+
+    if (rc != 0) {
+        printf("[TEST1] PIPELINE                : FAIL\n");
+        return -1;
+    }
+
+    if (result.action != OEM_WAKEUP_ACTION_SEND) {
+        printf("[TEST1] ACTION                  : FAIL\n");
+        return -1;
+    }
+
+    if (result.node_id != 4 ||
+        result.command_len != 2 ||
+        result.command[0] != 0x84 ||
+        result.command[1] != 0x08) {
+        printf("[TEST1] EXTRACT                 : FAIL\n");
+        return -1;
+    }
+
+    printf("[TEST1] ACTION                  : SEND [OK]\n");
+    printf("[TEST1] TX NODE                 : %u [OK]\n",
+           result.node_id);
+    printf("[TEST1] TX COMMAND              : %02X %02X [OK]\n",
+           result.command[0],
+           result.command[1]);
+
+    if (entry.len != 0) {
+        printf("[TEST1] DEQUEUE                 : FAIL\n");
+        return -1;
+    }
+
+    printf("[TEST1] DEQUEUE                 : CMDQ EMPTY [OK]\n");
+
+
+    /*
+     * TEST 2
+     *
+     * CMDQ vacia + wake-up.
+     * No debe producir SEND.
+     */
+    memset(&entry, 0, sizeof(entry));
+
+    rc = oem_wakeup_pipeline_run(
+        4,
+        4,
+        wake_notification,
+        sizeof(wake_notification),
+        &entry,
+        &result);
+
+    printf("[TEST2] WAKE + EMPTY CMDQ        : ");
+
+    if (rc != 0 ||
+        result.action != OEM_WAKEUP_ACTION_NONE) {
+        printf("FAIL\n");
+        return -1;
+    }
+
+    printf("NONE [OK]\n");
+
+
+    /*
+     * TEST 3
+     *
+     * Tenemos comando pendiente pero despierta NODE 3.
+     * La entrada NO debe consumirse.
+     */
+    if (oem_cmdq_entry_build(
+            &entry,
+            wake_no_more_information,
+            sizeof(wake_no_more_information)) != 0)
+        return -1;
+
+    rc = oem_wakeup_pipeline_run(
+        3,
+        4,
+        wake_notification,
+        sizeof(wake_notification),
+        &entry,
+        &result);
+
+    printf("[TEST3] WRONG NODE               : ");
+
+    if (rc != 0 ||
+        result.action != OEM_WAKEUP_ACTION_NONE ||
+        entry.len != 2) {
+        printf("FAIL\n");
+        return -1;
+    }
+
+    printf("NONE + CMDQ PRESERVED [OK]\n");
+
+
+    /*
+     * TEST 4
+     *
+     * Un comando distinto tambien debe poder atravesar
+     * el pipeline.
+     */
+    if (oem_cmdq_entry_build(
+            &entry,
+            battery_get,
+            sizeof(battery_get)) != 0)
+        return -1;
+
+    rc = oem_wakeup_pipeline_run(
+        4,
+        4,
+        wake_notification,
+        sizeof(wake_notification),
+        &entry,
+        &result);
+
+    printf("[TEST4] BATTERY_GET              : ");
+
+    if (rc != 0 ||
+        result.action != OEM_WAKEUP_ACTION_SEND ||
+        result.command_len != 2 ||
+        result.command[0] != 0x80 ||
+        result.command[1] != 0x02 ||
+        entry.len != 0) {
+        printf("FAIL\n");
+        return -1;
+    }
+
+    printf("SEND + DEQUEUE [OK]\n");
+
+
+    /*
+     * TEST 5
+     *
+     * Evento incorrecto. La cola debe conservarse.
+     */
+    if (oem_cmdq_entry_build(
+            &entry,
+            wake_no_more_information,
+            sizeof(wake_no_more_information)) != 0)
+        return -1;
+
+    rc = oem_wakeup_pipeline_run(
+        4,
+        4,
+        wake_no_more_information,
+        sizeof(wake_no_more_information),
+        &entry,
+        &result);
+
+    printf("[TEST5] RX 84 08                 : ");
+
+    if (rc != 0 ||
+        result.action != OEM_WAKEUP_ACTION_NONE ||
+        entry.len != 2) {
+        printf("FAIL\n");
+        return -1;
+    }
+
+    printf("NONE + CMDQ PRESERVED [OK]\n");
+
+
+    /*
+     * TEST 6
+     *
+     * Evento truncado debe rechazarse y no consumir CMDQ.
+     */
+    rc = oem_wakeup_pipeline_run(
+        4,
+        4,
+        wake_notification,
+        1,
+        &entry,
+        &result);
+
+    printf("[TEST6] TRUNCATED WAKE           : ");
+
+    if (rc == 0 || entry.len != 2) {
+        printf("FAIL\n");
+        return -1;
+    }
+
+    printf("REJECT + CMDQ PRESERVED [OK]\n");
+
+
+    printf("\n");
+    printf("===== PIPELINE RESULT =====\n");
+    printf("[+] ENQUEUE              OK\n");
+    printf("[+] WAKE-UP MATCH        OK\n");
+    printf("[+] SEND DECISION        OK\n");
+    printf("[+] COMMAND EXTRACTION   OK\n");
+    printf("[+] DEQUEUE              OK\n");
+    printf("[+] QUEUE PRESERVATION   OK\n");
+    printf("\n");
+    printf("[+] OEM WAKE-UP PIPELINE OFFLINE OK\n");
+    printf("========================================\n");
+
+    return 0;
+}
+
+
 static void usage(const char *prog)
 {
     fprintf(stderr,
@@ -4781,7 +5542,7 @@ static void usage(const char *prog)
         "--add-node-loop-selftest|"
         "--add-node-transaction-selftest|"
         "--add-node-failure-selftest|--add-node-real|"
-        "--listen|--send-data-selftest|"
+        "--listen|--oem-cmdq-selftest|--oem-wakeup-selftest|--oem-wakeup-pipeline-selftest|--send-data-selftest|"
         "--send-data-transaction-selftest|"
         "--send-data-callback-selftest|"
         "--send-data-wait-selftest|"
@@ -4838,6 +5599,12 @@ int main(int argc, char **argv)
             mode = 18;
         else if (!strcmp(argv[1], "--listen"))
             mode = 19;
+        else if (!strcmp(argv[1], "--oem-cmdq-selftest"))
+            mode = 27;
+        else if (!strcmp(argv[1], "--oem-wakeup-selftest"))
+            mode = 28;
+        else if (!strcmp(argv[1], "--oem-wakeup-pipeline-selftest"))
+            mode = 29;
         else if (!strcmp(argv[1], "--send-data-selftest"))
             mode = 20;
         else if (!strcmp(argv[1], "--send-data-transaction-selftest"))
@@ -4952,9 +5719,56 @@ int main(int argc, char **argv)
            mode == 24 ? "ZW_SEND_DATA_FULL_SELFTEST" :
            mode == 25 ? "ZW_SEND_DATA_REAL_ARMED_DRY_RUN" :
            mode == 26 ? "ZW_SEND_DATA_REAL" :
+                        mode == 27 ? "OEM_CMDQ_MODEL_SELFTEST" :
+                        mode == 28 ? "OEM_WAKEUP_DECISION_SELFTEST" :
+                        mode == 29 ? "OEM_WAKEUP_PIPELINE_SELFTEST" :
                         "PREPARE_ONLY");
 
     printf("========================================\n");
+
+    /*
+     * V7.12 OEM CMDQ MODEL SELFTEST.
+     *
+     * Debe ejecutarse antes de abrir ttyACM0.
+     */
+    if (mode == 27) {
+        rc = run_oem_cmdq_model_selftest();
+
+        printf("\n[+] resultado: %s\n",
+               rc == 0 ? "OK" : "ERROR");
+
+        return rc == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+
+
+
+    /*
+     * V7.12 STAGE 3 OEM WAKE-UP PIPELINE SELFTEST.
+     *
+     * OFFLINE y deliberadamente antes de setup_serial().
+     */
+    if (mode == 29) {
+        rc = run_oem_wakeup_pipeline_selftest();
+
+        printf("\n[+] resultado: %s\n",
+               rc == 0 ? "OK" : "ERROR");
+
+        return rc == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+
+    /*
+     * V7.12 STAGE 2B OEM WAKE-UP DECISION SELFTEST.
+     *
+     * Deliberadamente antes de setup_serial().
+     */
+    if (mode == 28) {
+        rc = run_oem_wakeup_decision_selftest();
+
+        printf("\n[+] resultado: %s\n",
+               rc == 0 ? "OK" : "ERROR");
+
+        return rc == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
 
     /*
      * V7.1 ZW_SEND_DATA SELFTEST.
