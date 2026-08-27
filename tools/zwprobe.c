@@ -5739,6 +5739,397 @@ static int run_oem_wakeup_pipeline_selftest(void)
 }
 
 
+/*
+ * ============================================================
+ * V7.12 STAGE 5 - OEM WAKE-UP E2E OFFLINE
+ * ============================================================
+ *
+ * Integra:
+ *
+ *   CMDQ
+ *      ->
+ *   WAKE-UP PIPELINE / PEEK
+ *      ->
+ *   zw_send_data_transaction()
+ *      ->
+ *   COMMIT / PRESERVE
+ *
+ * Usa socketpair() + fork().
+ *
+ * NO ttyACM0.
+ * NO Serial API real.
+ * NO Z-WAVE real.
+ */
+
+static int run_oem_wakeup_e2e_case(uint8_t tx_status,
+                                   int expect_commit)
+{
+    static const uint8_t wake_notification[] = {
+        0x84, 0x07
+    };
+
+    static const uint8_t pending_command[] = {
+        0x84, 0x08
+    };
+
+    struct oem_cmdq_entry entry;
+    struct oem_cmdq_entry before;
+    struct oem_wakeup_pipeline_result result;
+
+    int sv[2] = {-1, -1};
+    pid_t pid;
+    int status = 0;
+    int tx_rc;
+    int rc = 1;
+
+    uint8_t response[] = {
+        SOF, 0x04, RESPONSE, 0x13, 0x01, 0x00
+    };
+
+    uint8_t callback[] = {
+        SOF, 0x05, REQUEST, 0x13, 0x01, 0x00, 0x00
+    };
+
+
+    /*
+     * --------------------------------------------------------
+     * PREPARE CMDQ
+     * --------------------------------------------------------
+     */
+
+    if (oem_cmdq_entry_build(&entry,
+                             pending_command,
+                             sizeof(pending_command)) != 0) {
+        printf("[-] E2E CMDQ build fallo\n");
+        return 1;
+    }
+
+    before = entry;
+
+
+    /*
+     * --------------------------------------------------------
+     * WAKE-UP -> PEEK
+     * --------------------------------------------------------
+     */
+
+    if (oem_wakeup_pipeline_run(
+            4,
+            4,
+            wake_notification,
+            sizeof(wake_notification),
+            &entry,
+            &result) != 0) {
+        printf("[-] E2E wake-up pipeline fallo\n");
+        return 1;
+    }
+
+    if (result.action != OEM_WAKEUP_ACTION_SEND ||
+        result.node_id != 4 ||
+        result.command_len != sizeof(pending_command) ||
+        memcmp(result.command,
+               pending_command,
+               sizeof(pending_command)) != 0) {
+        printf("[-] E2E pipeline produjo SEND inesperado\n");
+        return 1;
+    }
+
+    if (memcmp(&entry, &before, sizeof(entry)) != 0) {
+        printf("[-] E2E PEEK consumio CMDQ prematuramente\n");
+        return 1;
+    }
+
+    printf("[+] WAKE-UP -> PEEK             OK\n");
+    printf("[+] CMDQ PRESERVED before TX    OK\n");
+
+
+    /*
+     * --------------------------------------------------------
+     * SERIAL API SIMULADA
+     * --------------------------------------------------------
+     */
+
+    response[sizeof(response) - 1] =
+        zw_checksum(&response[1], response[1]);
+
+    callback[5] = tx_status;
+
+    callback[sizeof(callback) - 1] =
+        zw_checksum(&callback[1], callback[1]);
+
+
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) < 0) {
+        perror("socketpair");
+        return 1;
+    }
+
+    pid = fork();
+
+    if (pid < 0) {
+        perror("fork");
+        close(sv[0]);
+        close(sv[1]);
+        return 1;
+    }
+
+
+    /*
+     * --------------------------------------------------------
+     * CHILD — controlador Z-Wave simulado
+     * --------------------------------------------------------
+     */
+
+    if (pid == 0) {
+        uint8_t frame[MAX_FRAME];
+        uint8_t b = 0;
+        size_t pos = 0;
+        size_t total = 0;
+
+        close(sv[1]);
+
+        if (read_byte_timeout(sv[0], &frame[0], 1000) != 1 ||
+            frame[0] != SOF)
+            _exit(10);
+
+        if (read_byte_timeout(sv[0], &frame[1], 1000) != 1)
+            _exit(11);
+
+        total = (size_t)frame[1] + 2;
+
+        if (total > sizeof(frame) || total < 5)
+            _exit(12);
+
+        pos = 2;
+
+        while (pos < total) {
+            if (read_byte_timeout(sv[0],
+                                  &frame[pos],
+                                  1000) != 1)
+                _exit(13);
+
+            pos++;
+        }
+
+        /*
+         * Debe ser:
+         *
+         * ZW_SEND_DATA
+         * NODE 4
+         * LEN 2
+         * COMMAND 84 08
+         */
+
+        if (frame[2] != REQUEST ||
+            frame[3] != 0x13 ||
+            frame[4] != 4 ||
+            frame[5] != 2 ||
+            frame[6] != 0x84 ||
+            frame[7] != 0x08)
+            _exit(14);
+
+
+        /*
+         * ACK request.
+         */
+
+        b = ACK;
+
+        if (write_all(sv[0], &b, 1) < 0)
+            _exit(15);
+
+
+        /*
+         * RESPONSE accepted.
+         */
+
+        if (write_all(sv[0],
+                      response,
+                      sizeof(response)) < 0)
+            _exit(16);
+
+
+        /*
+         * HOST debe ACKear RESPONSE.
+         */
+
+        if (read_byte_timeout(sv[0], &b, 1000) != 1 ||
+            b != ACK)
+            _exit(17);
+
+
+        /*
+         * CALLBACK con tx_status configurable.
+         */
+
+        if (write_all(sv[0],
+                      callback,
+                      sizeof(callback)) < 0)
+            _exit(18);
+
+
+        /*
+         * HOST debe ACKear CALLBACK.
+         */
+
+        if (read_byte_timeout(sv[0], &b, 1000) != 1 ||
+            b != ACK)
+            _exit(19);
+
+        close(sv[0]);
+        _exit(0);
+    }
+
+
+    /*
+     * --------------------------------------------------------
+     * PARENT — TRANSPORTE REAL SOBRE SOCKETPAIR
+     * --------------------------------------------------------
+     */
+
+    close(sv[0]);
+    sv[0] = -1;
+
+    tx_rc = zw_send_data_transaction(
+        sv[1],
+        result.node_id,
+        result.command,
+        result.command_len,
+        0x25,
+        0x01);
+
+    close(sv[1]);
+    sv[1] = -1;
+
+
+    /*
+     * --------------------------------------------------------
+     * COMMIT / PRESERVE
+     * --------------------------------------------------------
+     */
+
+    if (tx_rc == 0) {
+        if (oem_cmdq_transaction_finish(
+                &entry,
+                OEM_CMDQ_TX_COMPLETE_OK) != 0) {
+            printf("[-] E2E COMMIT fallo\n");
+            goto parent_out;
+        }
+    } else {
+        if (oem_cmdq_transaction_finish(
+                &entry,
+                OEM_CMDQ_TX_FAILED) != 0) {
+            printf("[-] E2E PRESERVE fallo\n");
+            goto parent_out;
+        }
+    }
+
+
+    if (expect_commit) {
+        if (tx_rc != 0) {
+            printf("[-] E2E esperaba TX OK\n");
+            goto parent_out;
+        }
+
+        if (entry.len != 0) {
+            printf("[-] E2E esperaba CMDQ EMPTY\n");
+            goto parent_out;
+        }
+
+        printf("[+] TRANSMIT_COMPLETE_OK        OK\n");
+        printf("[+] COMMIT / CMDQ EMPTY         OK\n");
+    } else {
+        if (tx_rc == 0) {
+            printf("[-] E2E esperaba TX FAIL\n");
+            goto parent_out;
+        }
+
+        if (memcmp(&entry, &before, sizeof(entry)) != 0) {
+            printf("[-] E2E fallo TX consumio CMDQ\n");
+            goto parent_out;
+        }
+
+        printf("[+] TX FAILURE detected         OK\n");
+        printf("[+] PRESERVE / CMDQ INTACT      OK\n");
+    }
+
+    rc = 0;
+
+
+parent_out:
+
+    if (sv[1] >= 0)
+        close(sv[1]);
+
+    if (waitpid(pid, &status, 0) < 0) {
+        perror("waitpid");
+        return 1;
+    }
+
+    if (!WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        printf("[-] E2E simulador termino con error\n");
+        return 1;
+    }
+
+    return rc;
+}
+
+
+static int run_oem_wakeup_e2e_selftest(void)
+{
+    int rc;
+
+    printf("========================================\n");
+    printf(" V7.12 OEM WAKE-UP E2E SELFTEST\n");
+    printf("========================================\n");
+    printf("[+] OFFLINE ONLY\n");
+    printf("[+] socketpair() + fork()\n");
+    printf("[+] REAL zw_send_data_transaction()\n");
+    printf("[+] NO ttyACM0\n");
+    printf("[+] NO Z-WAVE REAL\n");
+
+
+    printf("\n");
+    printf("===== TEST 1 — TX SUCCESS =====\n");
+
+    rc = run_oem_wakeup_e2e_case(0x00, 1);
+
+    if (rc != 0) {
+        printf("[-] TEST 1 FAIL\n");
+        return 1;
+    }
+
+
+    printf("\n");
+    printf("===== TEST 2 — TX FAILURE =====\n");
+
+    rc = run_oem_wakeup_e2e_case(0x01, 0);
+
+    if (rc != 0) {
+        printf("[-] TEST 2 FAIL\n");
+        return 1;
+    }
+
+
+    printf("\n");
+    printf("===== E2E RESULT =====\n");
+    printf("[+] CMDQ ENQUEUE              OK\n");
+    printf("[+] WAKE-UP MATCH             OK\n");
+    printf("[+] PEEK                      OK\n");
+    printf("[+] ZW_SEND_DATA              OK\n");
+    printf("[+] CALLBACK SUCCESS          OK\n");
+    printf("[+] CALLBACK FAILURE          OK\n");
+    printf("[+] COMMIT ON SUCCESS         OK\n");
+    printf("[+] PRESERVE ON FAILURE       OK\n");
+    printf("\n");
+    printf("[+] OEM WAKE-UP E2E OFFLINE OK\n");
+    printf("========================================\n");
+
+    return 0;
+}
+
+
+
 static void usage(const char *prog)
 {
     fprintf(stderr,
@@ -5753,7 +6144,7 @@ static void usage(const char *prog)
         "--add-node-loop-selftest|"
         "--add-node-transaction-selftest|"
         "--add-node-failure-selftest|--add-node-real|"
-        "--listen|--oem-cmdq-selftest|--oem-wakeup-selftest|--oem-wakeup-pipeline-selftest|--oem-cmdq-transaction-selftest|--send-data-selftest|"
+        "--listen|--oem-cmdq-selftest|--oem-wakeup-selftest|--oem-wakeup-pipeline-selftest|--oem-cmdq-transaction-selftest|--oem-wakeup-e2e-selftest|--send-data-selftest|"
         "--send-data-transaction-selftest|"
         "--send-data-callback-selftest|"
         "--send-data-wait-selftest|"
@@ -5818,6 +6209,8 @@ int main(int argc, char **argv)
             mode = 29;
         else if (!strcmp(argv[1], "--oem-cmdq-transaction-selftest"))
             mode = 30;
+        else if (!strcmp(argv[1], "--oem-wakeup-e2e-selftest"))
+            mode = 31;
         else if (!strcmp(argv[1], "--send-data-selftest"))
             mode = 20;
         else if (!strcmp(argv[1], "--send-data-transaction-selftest"))
@@ -5936,6 +6329,7 @@ int main(int argc, char **argv)
                         mode == 28 ? "OEM_WAKEUP_DECISION_SELFTEST" :
                         mode == 29 ? "OEM_WAKEUP_PIPELINE_SELFTEST" :
                         mode == 30 ? "OEM_CMDQ_TRANSACTION_SELFTEST" :
+                        mode == 31 ? "OEM_WAKEUP_E2E_SELFTEST" :
                         "PREPARE_ONLY");
 
     printf("========================================\n");
@@ -5969,6 +6363,22 @@ int main(int argc, char **argv)
 
         return rc == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     }
+
+    /*
+     * V7.12 STAGE 5 OEM WAKE-UP E2E SELFTEST.
+     *
+     * OFFLINE y deliberadamente antes de setup_serial().
+     */
+    if (mode == 31) {
+        rc = run_oem_wakeup_e2e_selftest();
+
+        printf("\n[+] resultado: %s\n",
+               rc == 0 ? "OK" : "ERROR");
+
+        return rc == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+
+
 
     /*
      * V7.12 STAGE 4 TRANSACTIONAL OEM CMDQ SELFTEST.
