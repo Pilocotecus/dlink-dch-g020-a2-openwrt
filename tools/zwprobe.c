@@ -3579,6 +3579,20 @@ run_oem_shadow_wakeup_hook_selftest(void)
 }
 
 
+/*
+ * V7.12 STAGE 7D.2
+ *
+ * Bridge temprano decoder -> Shadow CMDQ.
+ *
+ * La implementacion esta situada despues del modelo Stage 7B.
+ * Este bridge NO transmite.
+ */
+static int oem_shadow_cmdq_decoder_bridge(
+    uint8_t source_node,
+    const uint8_t *command,
+    size_t command_len);
+
+
 static void decode_application_command_handler(
     const uint8_t *f,
     size_t n);
@@ -3679,7 +3693,23 @@ static void decode_application_command_handler(const uint8_t *f,
         }
 
         if (shadow_rc == OEM_SHADOW_WAKEUP_DETECTED) {
+            int candidate_rc;
+
+            candidate_rc = oem_shadow_cmdq_decoder_bridge(
+                source_node,
+                &d[3],
+                command_len);
+
             printf("[+] V7.12 SHADOW WAKE-UP   : DETECTED\n");
+
+            if (candidate_rc > 0) {
+                printf("[+] SHADOW CMDQ            : MATCH\n");
+                printf("[+] SHADOW TX CANDIDATE    : READY\n");
+                printf("[+] SHADOW CMDQ STATE      : PRESERVED\n");
+                printf("[+] SHADOW REAL TX         : BLOCKED\n");
+            } else if (candidate_rc < 0) {
+                printf("[!] SHADOW CMDQ            : REJECT\n");
+            }
             printf("[+] SHADOW Source Node     : %u\n",
                    source_node);
             printf("[+] SHADOW Event           : 84 07\n");
@@ -5744,6 +5774,385 @@ static int oem_wakeup_pipeline_run(
  * OFFLINE MODEL ONLY.
  */
 
+
+/*
+ * ============================================================
+ * V7.12 STAGE 7B - REAL RX -> SHADOW CMDQ TX CANDIDATE
+ * ============================================================
+ *
+ * Modelo de integracion:
+ *
+ *   APPLICATION_COMMAND_HANDLER
+ *       -> WAKE_UP_NOTIFICATION
+ *       -> shadow CMDQ
+ *       -> oem_wakeup_pipeline_run()
+ *       -> TX candidate
+ *
+ * IMPORTANTE:
+ *
+ *   - NO llama zw_send_data_transaction().
+ *   - NO abre ningun puerto adicional.
+ *   - NO transmite Z-Wave.
+ *   - NO hace COMMIT de CMDQ.
+ *   - CMDQ permanece intacta.
+ *
+ * El objetivo es demostrar que el RX real puede producir
+ * exactamente el candidato que posteriormente consumira
+ * el transporte real, manteniendo TX bloqueado.
+ */
+
+static int oem_shadow_cmdq_enabled = 0;
+static uint8_t oem_shadow_cmdq_expected_node = 0;
+static struct oem_cmdq_entry oem_shadow_cmdq_entry;
+
+static int oem_shadow_candidate_valid = 0;
+static struct oem_wakeup_pipeline_result
+    oem_shadow_candidate;
+
+
+static void oem_shadow_cmdq_reset(void)
+{
+    oem_shadow_cmdq_enabled = 0;
+    oem_shadow_cmdq_expected_node = 0;
+
+    memset(&oem_shadow_cmdq_entry,
+           0,
+           sizeof(oem_shadow_cmdq_entry));
+
+    oem_shadow_candidate_valid = 0;
+
+    memset(&oem_shadow_candidate,
+           0,
+           sizeof(oem_shadow_candidate));
+}
+
+
+static int oem_shadow_cmdq_arm(
+        uint8_t expected_node,
+        const uint8_t *command,
+        size_t command_len)
+{
+    int rc;
+
+    if (expected_node == 0 || expected_node > 232)
+        return -1;
+
+    rc = oem_cmdq_entry_build(
+        &oem_shadow_cmdq_entry,
+        command,
+        command_len);
+
+    if (rc != 0)
+        return -1;
+
+    oem_shadow_cmdq_expected_node = expected_node;
+    oem_shadow_cmdq_enabled = 1;
+
+    oem_shadow_candidate_valid = 0;
+
+    memset(&oem_shadow_candidate,
+           0,
+           sizeof(oem_shadow_candidate));
+
+    return 0;
+}
+
+
+static int oem_shadow_cmdq_consider_wakeup(
+        uint8_t source_node,
+        const uint8_t *event,
+        size_t event_len)
+{
+    struct oem_wakeup_pipeline_result result;
+    int rc;
+
+    oem_shadow_candidate_valid = 0;
+
+    memset(&oem_shadow_candidate,
+           0,
+           sizeof(oem_shadow_candidate));
+
+    if (!oem_shadow_cmdq_enabled)
+        return 0;
+
+    rc = oem_wakeup_pipeline_run(
+        source_node,
+        oem_shadow_cmdq_expected_node,
+        event,
+        event_len,
+        &oem_shadow_cmdq_entry,
+        &result);
+
+    if (rc != 0)
+        return -1;
+
+    if (result.action != OEM_WAKEUP_ACTION_SEND)
+        return 0;
+
+    oem_shadow_candidate = result;
+    oem_shadow_candidate_valid = 1;
+
+    /*
+     * STAGE 7B termina aqui.
+     *
+     * NO zw_send_data_transaction().
+     * NO oem_cmdq_transaction_finish().
+     *
+     * La CMDQ sigue intacta.
+     */
+    return 1;
+}
+
+
+static int
+run_oem_shadow_cmdq_candidate_selftest(void)
+{
+    static const uint8_t wake_notification[] = {
+        0x84, 0x07
+    };
+
+    static const uint8_t wake_no_more_information[] = {
+        0x84, 0x08
+    };
+
+    static const uint8_t cmd_no_more_information[] = {
+        0x84, 0x08
+    };
+
+    static const uint8_t battery_get[] = {
+        0x80, 0x02
+    };
+
+    int rc;
+
+    printf("========================================\n");
+    printf(" V7.12 REAL RX -> SHADOW CMDQ SELFTEST\n");
+    printf("========================================\n");
+    printf("[+] OFFLINE ONLY\n");
+    printf("[+] NO ttyACM0\n");
+    printf("[+] NO Serial API REAL\n");
+    printf("[+] NO ZW_SEND_DATA\n");
+    printf("[+] SHADOW TX BLOCKED\n");
+    printf("\n");
+
+
+    /*
+     * TEST 1:
+     * NODE4 wakes while CMDQ contains 84 08.
+     */
+    oem_shadow_cmdq_reset();
+
+    rc = oem_shadow_cmdq_arm(
+        4,
+        cmd_no_more_information,
+        sizeof(cmd_no_more_information));
+
+    if (rc != 0) {
+        printf("[TEST1] ARM CMDQ              : FAIL\n");
+        return -1;
+    }
+
+    rc = oem_shadow_cmdq_consider_wakeup(
+        4,
+        wake_notification,
+        sizeof(wake_notification));
+
+    printf("[TEST1] NODE4 + WAKE + CMDQ   : ");
+
+    if (rc != 1 ||
+        !oem_shadow_candidate_valid ||
+        oem_shadow_candidate.action != OEM_WAKEUP_ACTION_SEND ||
+        oem_shadow_candidate.node_id != 4 ||
+        oem_shadow_candidate.command_len != 2 ||
+        oem_shadow_candidate.command[0] != 0x84 ||
+        oem_shadow_candidate.command[1] != 0x08 ||
+        oem_shadow_cmdq_entry.len != 2) {
+        printf("FAIL\n");
+        return -1;
+    }
+
+    printf("TX CANDIDATE 4 / 84 08 [OK]\n");
+
+
+    /*
+     * TEST 2:
+     * Wrong node. CMDQ debe preservarse.
+     */
+    rc = oem_shadow_cmdq_consider_wakeup(
+        5,
+        wake_notification,
+        sizeof(wake_notification));
+
+    printf("[TEST2] WRONG NODE            : ");
+
+    if (rc != 0 ||
+        oem_shadow_candidate_valid ||
+        oem_shadow_cmdq_entry.len != 2) {
+        printf("FAIL\n");
+        return -1;
+    }
+
+    printf("NONE + CMDQ PRESERVED [OK]\n");
+
+
+    /*
+     * TEST 3:
+     * 84 08 recibido no es Wake Up Notification.
+     */
+    rc = oem_shadow_cmdq_consider_wakeup(
+        4,
+        wake_no_more_information,
+        sizeof(wake_no_more_information));
+
+    printf("[TEST3] RX 84 08              : ");
+
+    if (rc != 0 ||
+        oem_shadow_candidate_valid ||
+        oem_shadow_cmdq_entry.len != 2) {
+        printf("FAIL\n");
+        return -1;
+    }
+
+    printf("NONE + CMDQ PRESERVED [OK]\n");
+
+
+    /*
+     * TEST 4:
+     * Otro comando CMDQ debe producir exactamente
+     * otro candidato.
+     */
+    oem_shadow_cmdq_reset();
+
+    rc = oem_shadow_cmdq_arm(
+        4,
+        battery_get,
+        sizeof(battery_get));
+
+    if (rc != 0) {
+        printf("[TEST4] ARM BATTERY_GET       : FAIL\n");
+        return -1;
+    }
+
+    rc = oem_shadow_cmdq_consider_wakeup(
+        4,
+        wake_notification,
+        sizeof(wake_notification));
+
+    printf("[TEST4] BATTERY_GET CMDQ       : ");
+
+    if (rc != 1 ||
+        !oem_shadow_candidate_valid ||
+        oem_shadow_candidate.node_id != 4 ||
+        oem_shadow_candidate.command_len != 2 ||
+        oem_shadow_candidate.command[0] != 0x80 ||
+        oem_shadow_candidate.command[1] != 0x02 ||
+        oem_shadow_cmdq_entry.len != 2) {
+        printf("FAIL\n");
+        return -1;
+    }
+
+    printf("TX CANDIDATE 4 / 80 02 [OK]\n");
+
+
+    /*
+     * TEST 5:
+     * Shadow desarmado.
+     */
+    oem_shadow_cmdq_reset();
+
+    rc = oem_shadow_cmdq_consider_wakeup(
+        4,
+        wake_notification,
+        sizeof(wake_notification));
+
+    printf("[TEST5] SHADOW DISARMED        : ");
+
+    if (rc != 0 ||
+        oem_shadow_candidate_valid) {
+        printf("FAIL\n");
+        return -1;
+    }
+
+    printf("NONE [OK]\n");
+
+
+    printf("\n");
+    printf("===== STAGE 7B RESULT =====\n");
+    printf("[+] REAL RX MODEL        OK\n");
+    printf("[+] SHADOW CMDQ          OK\n");
+    printf("[+] PIPELINE PEEK        OK\n");
+    printf("[+] TX CANDIDATE         OK\n");
+    printf("[+] CMDQ PRESERVED       OK\n");
+    printf("[+] REAL TX              BLOCKED\n");
+    printf("[+] NO COMMIT            OK\n");
+    printf("========================================\n");
+
+    oem_shadow_cmdq_reset();
+
+    return 0;
+}
+
+/*
+ * ============================================================
+ * V7.12 STAGE 7D.2 - DECODER -> SHADOW CMDQ BRIDGE
+ * ============================================================
+ *
+ * Aqui ya estan definidos:
+ *
+ *   oem_shadow_cmdq_consider_wakeup()
+ *   oem_shadow_candidate_valid
+ *   oem_shadow_candidate
+ *
+ * El bridge solo construye/expone el candidato SHADOW.
+ *
+ * NO llama zw_send_data_transaction().
+ * NO hace TX real.
+ * NO hace COMMIT de CMDQ.
+ */
+static int oem_shadow_cmdq_decoder_bridge(
+    uint8_t source_node,
+    const uint8_t *command,
+    size_t command_len)
+{
+    int rc;
+    size_t i;
+
+    rc = oem_shadow_cmdq_consider_wakeup(
+        source_node,
+        command,
+        command_len);
+
+    if (rc <= 0)
+        return rc;
+
+    if (!oem_shadow_candidate_valid)
+        return 0;
+
+    printf("[+] SHADOW Candidate Node   : %u\n",
+           oem_shadow_candidate.node_id);
+
+    printf("[+] SHADOW Candidate CMD    :");
+
+    for (i = 0;
+         i < oem_shadow_candidate.command_len;
+         ++i) {
+        printf(" %02X",
+               oem_shadow_candidate.command[i]);
+    }
+
+    printf("\n");
+
+    /*
+     * SAFETY BOUNDARY:
+     *
+     * Stage 7D.2 termina aqui.
+     * No existe ninguna llamada de transmision.
+     */
+    return 1;
+}
+
+
+
 enum oem_cmdq_tx_result {
     OEM_CMDQ_TX_FAILED = 0,
     OEM_CMDQ_TX_COMPLETE_OK = 1
@@ -6604,7 +7013,7 @@ static void usage(const char *prog)
         "--add-node-loop-selftest|"
         "--add-node-transaction-selftest|"
         "--add-node-failure-selftest|--add-node-real|"
-        "--listen|--oem-cmdq-selftest|--oem-wakeup-selftest|--oem-wakeup-pipeline-selftest|--oem-cmdq-transaction-selftest|--oem-wakeup-e2e-selftest|--oem-rx-shadow-selftest|--send-data-selftest|"
+        "--listen|--oem-cmdq-selftest|--oem-wakeup-selftest|--oem-wakeup-pipeline-selftest|--oem-cmdq-transaction-selftest|--oem-wakeup-e2e-selftest|--oem-rx-shadow-selftest|--oem-shadow-cmdq-selftest|--send-data-selftest|"
         "--send-data-transaction-selftest|"
         "--send-data-callback-selftest|"
         "--send-data-wait-selftest|"
@@ -6673,6 +7082,8 @@ int main(int argc, char **argv)
             mode = 31;
         else if (!strcmp(argv[1], "--oem-rx-shadow-selftest"))
             mode = 32;
+        else if (!strcmp(argv[1], "--oem-shadow-cmdq-selftest"))
+            mode = 33;
         else if (!strcmp(argv[1], "--send-data-selftest"))
             mode = 20;
         else if (!strcmp(argv[1], "--send-data-transaction-selftest"))
@@ -6793,6 +7204,7 @@ int main(int argc, char **argv)
                         mode == 30 ? "OEM_CMDQ_TRANSACTION_SELFTEST" :
                         mode == 31 ? "OEM_WAKEUP_E2E_SELFTEST" :
                         mode == 32 ? "OEM_RX_DECODER_SHADOW_SELFTEST" :
+                        mode == 33 ? "OEM_SHADOW_CMDQ_CANDIDATE_SELFTEST" :
                         "PREPARE_ONLY");
 
     printf("========================================\n");
@@ -6840,6 +7252,23 @@ int main(int argc, char **argv)
 
         return rc == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     }
+
+    /*
+     * V7.12 STAGE 7E SHADOW CMDQ CANDIDATE SELFTEST.
+     *
+     * OFFLINE y deliberadamente antes de setup_serial().
+     * NO abre ttyACM0.
+     * NO ejecuta transmision Z-Wave real.
+     */
+    if (mode == 33) {
+        rc = run_oem_shadow_cmdq_candidate_selftest();
+
+        printf("\n[+] resultado: %s\n",
+               rc == 0 ? "OK" : "ERROR");
+
+        return rc == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+
 
     /*
      * V7.12 STAGE 6D RX FRAME -> DECODER -> SHADOW SELFTEST.
