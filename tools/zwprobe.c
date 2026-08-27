@@ -3366,6 +3366,224 @@ static int run_zw_send_data_selftest(void)
 }
 
 
+/*
+ * ============================================================
+ * V7.12 STAGE 6B - REAL RX -> SHADOW WAKE-UP HOOK
+ * ============================================================
+ *
+ * Esta frontera recibe datos YA extraidos de
+ * APPLICATION_COMMAND_HANDLER.
+ *
+ * IMPORTANTE:
+ *
+ *   - NO abre el puerto serie.
+ *   - NO llama ZW_SEND_DATA.
+ *   - NO modifica CMDQ.
+ *   - NO responde al nodo.
+ *   - NO transmite ningun byte.
+ *
+ * Solo demuestra que un WAKE_UP_NOTIFICATION recibido por
+ * el camino RX real puede alcanzar una frontera OEM controlada.
+ */
+
+enum oem_shadow_wakeup_result {
+    OEM_SHADOW_WAKEUP_NONE = 0,
+    OEM_SHADOW_WAKEUP_DETECTED = 1,
+    OEM_SHADOW_WAKEUP_REJECT = -1
+};
+
+
+static int oem_shadow_wakeup_hook(
+        uint8_t source_node,
+        const uint8_t *command,
+        size_t command_len)
+{
+    if (source_node == 0 || source_node > 232)
+        return OEM_SHADOW_WAKEUP_REJECT;
+
+    if (command == NULL)
+        return OEM_SHADOW_WAKEUP_REJECT;
+
+    if (command_len < 2)
+        return OEM_SHADOW_WAKEUP_REJECT;
+
+    /*
+     * Unicamente reconocemos:
+     *
+     *   COMMAND_CLASS_WAKE_UP = 0x84
+     *   WAKE_UP_NOTIFICATION  = 0x07
+     */
+    if (command[0] != 0x84 ||
+        command[1] != 0x07)
+        return OEM_SHADOW_WAKEUP_NONE;
+
+    return OEM_SHADOW_WAKEUP_DETECTED;
+}
+
+
+/*
+ * ============================================================
+ * V7.12 STAGE 6C - DECODER SHADOW OBSERVER
+ * ============================================================
+ *
+ * Estado utilizado exclusivamente por los selftests offline
+ * para observar el resultado del camino:
+ *
+ *   Serial API frame
+ *       -> APPLICATION_COMMAND_HANDLER decoder
+ *       -> OEM shadow wake-up hook
+ *
+ * No transmite.
+ * No modifica CMDQ.
+ */
+static int oem_shadow_decoder_observer_enabled = 0;
+static int oem_shadow_decoder_last_result =
+    OEM_SHADOW_WAKEUP_NONE;
+static uint8_t oem_shadow_decoder_last_node = 0;
+
+static void oem_shadow_decoder_observer_reset(void)
+{
+    oem_shadow_decoder_last_result =
+        OEM_SHADOW_WAKEUP_NONE;
+    oem_shadow_decoder_last_node = 0;
+}
+
+
+static int __attribute__((unused))
+run_oem_shadow_wakeup_hook_selftest(void)
+{
+    static const uint8_t wake_notification[] = {
+        0x84, 0x07
+    };
+
+    static const uint8_t wake_no_more_information[] = {
+        0x84, 0x08
+    };
+
+    static const uint8_t battery_report[] = {
+        0x80, 0x03, 0x64
+    };
+
+    static const uint8_t truncated[] = {
+        0x84
+    };
+
+    int rc;
+
+    printf("========================================\n");
+    printf(" V7.12 RX SHADOW WAKE-UP HOOK SELFTEST\n");
+    printf("========================================\n");
+    printf("[+] OFFLINE ONLY\n");
+    printf("[+] NO ttyACM0\n");
+    printf("[+] NO Serial API REAL\n");
+    printf("[+] NO CMDQ MUTATION\n");
+    printf("[+] NO ZW_SEND_DATA\n");
+    printf("\n");
+
+    rc = oem_shadow_wakeup_hook(
+        4,
+        wake_notification,
+        sizeof(wake_notification));
+
+    printf("[TEST1] NODE4 + 84 07 : ");
+
+    if (rc != OEM_SHADOW_WAKEUP_DETECTED) {
+        printf("FAIL\n");
+        return -1;
+    }
+
+    printf("WAKE-UP DETECTED [OK]\n");
+
+
+    rc = oem_shadow_wakeup_hook(
+        4,
+        wake_no_more_information,
+        sizeof(wake_no_more_information));
+
+    printf("[TEST2] NODE4 + 84 08 : ");
+
+    if (rc != OEM_SHADOW_WAKEUP_NONE) {
+        printf("FAIL\n");
+        return -1;
+    }
+
+    printf("NONE [OK]\n");
+
+
+    rc = oem_shadow_wakeup_hook(
+        4,
+        battery_report,
+        sizeof(battery_report));
+
+    printf("[TEST3] NODE4 + 80 03 : ");
+
+    if (rc != OEM_SHADOW_WAKEUP_NONE) {
+        printf("FAIL\n");
+        return -1;
+    }
+
+    printf("NONE [OK]\n");
+
+
+    rc = oem_shadow_wakeup_hook(
+        4,
+        truncated,
+        sizeof(truncated));
+
+    printf("[TEST4] TRUNCATED     : ");
+
+    if (rc != OEM_SHADOW_WAKEUP_REJECT) {
+        printf("FAIL\n");
+        return -1;
+    }
+
+    printf("REJECT [OK]\n");
+
+
+    rc = oem_shadow_wakeup_hook(
+        0,
+        wake_notification,
+        sizeof(wake_notification));
+
+    printf("[TEST5] NODE0         : ");
+
+    if (rc != OEM_SHADOW_WAKEUP_REJECT) {
+        printf("FAIL\n");
+        return -1;
+    }
+
+    printf("REJECT [OK]\n");
+
+
+    rc = oem_shadow_wakeup_hook(
+        233,
+        wake_notification,
+        sizeof(wake_notification));
+
+    printf("[TEST6] NODE233       : ");
+
+    if (rc != OEM_SHADOW_WAKEUP_REJECT) {
+        printf("FAIL\n");
+        return -1;
+    }
+
+    printf("REJECT [OK]\n");
+
+    printf("\n");
+    printf("[+] REAL RX BOUNDARY MODEL OK\n");
+    printf("[+] SHADOW ONLY\n");
+    printf("[+] NINGUNA TRANSMISION EJECUTADA\n");
+    printf("========================================\n");
+
+    return 0;
+}
+
+
+static void decode_application_command_handler(
+    const uint8_t *f,
+    size_t n);
+
+
 static void decode_application_command_handler(const uint8_t *f,
                                                size_t n)
 {
@@ -3434,6 +3652,43 @@ static void decode_application_command_handler(const uint8_t *f,
         printf(" %02X", d[3 + i]);
 
     printf("\n");
+
+    /*
+     * V7.12 STAGE 6B
+     *
+     * Frontera RX REAL -> OEM SHADOW.
+     *
+     * Solo observa el comando recibido.
+     * NO transmite.
+     */
+    {
+        int shadow_rc;
+
+        shadow_rc = oem_shadow_wakeup_hook(
+            source_node,
+            &d[3],
+            command_len);
+
+        /*
+         * V7.12 Stage 6C:
+         * observacion exclusiva para selftests offline.
+         */
+        if (oem_shadow_decoder_observer_enabled) {
+            oem_shadow_decoder_last_result = shadow_rc;
+            oem_shadow_decoder_last_node = source_node;
+        }
+
+        if (shadow_rc == OEM_SHADOW_WAKEUP_DETECTED) {
+            printf("[+] V7.12 SHADOW WAKE-UP   : DETECTED\n");
+            printf("[+] SHADOW Source Node     : %u\n",
+                   source_node);
+            printf("[+] SHADOW Event           : 84 07\n");
+            printf("[+] SHADOW Action          : TRACE ONLY\n");
+            printf("[+] SHADOW TX              : BLOCKED\n");
+        } else if (shadow_rc == OEM_SHADOW_WAKEUP_REJECT) {
+            printf("[!] V7.12 SHADOW WAKE-UP   : REJECT\n");
+        }
+    }
 
     if (command_len >= 2) {
         uint8_t cc = d[3];
@@ -4574,6 +4829,211 @@ static int run_zw_send_data_transaction_selftest(void)
     printf("[+] Todas las rutas terminaron antes de TX\n");
     printf("[+] SELFTEST V7.2 OK\n");
     printf("========================================\n");
+
+    return 0;
+}
+
+
+
+/*
+ * ============================================================
+ * V7.12 STAGE 6C - RX FRAME -> DECODER -> SHADOW SELFTEST
+ * ============================================================
+ *
+ * OFFLINE ONLY.
+ *
+ * Introduce frames Serial API completos directamente en el
+ * decoder APPLICATION_COMMAND_HANDLER.
+ *
+ * NO ttyACM0.
+ * NO Serial API real.
+ * NO ZW_SEND_DATA.
+ * NO CMDQ mutation.
+ */
+static int run_oem_rx_decoder_shadow_selftest(void)
+{
+    /*
+     * SOF LEN REQUEST FUNC
+     * RX_STATUS SOURCE LEN COMMAND... CHECKSUM
+     *
+     * El decoder ya recibe el frame completo validado por
+     * la capa Serial API. Para este selftest solo necesitamos
+     * reproducir su layout.
+     */
+    static const uint8_t wake_frame[] = {
+        0x01, 0x07, 0x00, 0x04,
+        0x00, 0x04, 0x02, 0x84, 0x07,
+        0x00
+    };
+
+    static const uint8_t no_more_frame[] = {
+        0x01, 0x07, 0x00, 0x04,
+        0x00, 0x04, 0x02, 0x84, 0x08,
+        0x00
+    };
+
+    static const uint8_t battery_frame[] = {
+        0x01, 0x08, 0x00, 0x04,
+        0x00, 0x04, 0x03, 0x80, 0x03, 0x64,
+        0x00
+    };
+
+    static const uint8_t wrong_node_frame[] = {
+        0x01, 0x07, 0x00, 0x04,
+        0x00, 0x05, 0x02, 0x84, 0x07,
+        0x00
+    };
+
+    static const uint8_t bad_declared_len_frame[] = {
+        0x01, 0x06, 0x00, 0x04,
+        0x00, 0x04, 0x03, 0x84, 0x07,
+        0x00
+    };
+
+    printf("========================================\\n");
+    printf(" V7.12 RX FRAME -> DECODER -> SHADOW SELFTEST\\n");
+    printf("========================================\\n");
+    printf("[+] OFFLINE ONLY\\n");
+    printf("[+] NO ttyACM0\\n");
+    printf("[+] NO Serial API REAL\\n");
+    printf("[+] NO CMDQ MUTATION\\n");
+    printf("[+] NO ZW_SEND_DATA\\n");
+    printf("\\n");
+
+    oem_shadow_decoder_observer_enabled = 1;
+
+
+    /*
+     * TEST 1
+     * Frame realista Wake Up Notification.
+     */
+    oem_shadow_decoder_observer_reset();
+
+    decode_application_command_handler(
+        wake_frame,
+        sizeof(wake_frame));
+
+    printf("[TEST1] FRAME NODE4 / 84 07 : ");
+
+    if (oem_shadow_decoder_last_result !=
+            OEM_SHADOW_WAKEUP_DETECTED ||
+        oem_shadow_decoder_last_node != 4) {
+        printf("FAIL\\n");
+        oem_shadow_decoder_observer_enabled = 0;
+        return -1;
+    }
+
+    printf("DETECTED [OK]\\n");
+
+
+    /*
+     * TEST 2
+     * WAKE_UP_NO_MORE_INFORMATION no debe disparar wake.
+     */
+    oem_shadow_decoder_observer_reset();
+
+    decode_application_command_handler(
+        no_more_frame,
+        sizeof(no_more_frame));
+
+    printf("[TEST2] FRAME NODE4 / 84 08 : ");
+
+    if (oem_shadow_decoder_last_result !=
+            OEM_SHADOW_WAKEUP_NONE ||
+        oem_shadow_decoder_last_node != 4) {
+        printf("FAIL\\n");
+        oem_shadow_decoder_observer_enabled = 0;
+        return -1;
+    }
+
+    printf("NONE [OK]\\n");
+
+
+    /*
+     * TEST 3
+     * Battery Report tampoco es Wake Up Notification.
+     */
+    oem_shadow_decoder_observer_reset();
+
+    decode_application_command_handler(
+        battery_frame,
+        sizeof(battery_frame));
+
+    printf("[TEST3] FRAME NODE4 / 80 03 : ");
+
+    if (oem_shadow_decoder_last_result !=
+            OEM_SHADOW_WAKEUP_NONE ||
+        oem_shadow_decoder_last_node != 4) {
+        printf("FAIL\\n");
+        oem_shadow_decoder_observer_enabled = 0;
+        return -1;
+    }
+
+    printf("NONE [OK]\\n");
+
+
+    /*
+     * TEST 4
+     * El hook Stage 6B detecta 84 07 independientemente
+     * del nodo; verificamos que el decoder conserva source.
+     */
+    oem_shadow_decoder_observer_reset();
+
+    decode_application_command_handler(
+        wrong_node_frame,
+        sizeof(wrong_node_frame));
+
+    printf("[TEST4] FRAME NODE5 / 84 07 : ");
+
+    if (oem_shadow_decoder_last_result !=
+            OEM_SHADOW_WAKEUP_DETECTED ||
+        oem_shadow_decoder_last_node != 5) {
+        printf("FAIL\\n");
+        oem_shadow_decoder_observer_enabled = 0;
+        return -1;
+    }
+
+    printf("DETECTED + SOURCE PRESERVED [OK]\\n");
+
+
+    /*
+     * TEST 5
+     * command_len declara mas bytes de los disponibles.
+     * El decoder debe rechazar antes del shadow hook.
+     */
+    oem_shadow_decoder_observer_reset();
+
+    decode_application_command_handler(
+        bad_declared_len_frame,
+        sizeof(bad_declared_len_frame));
+
+    printf("[TEST5] INVALID COMMAND LENGTH : ");
+
+    if (oem_shadow_decoder_last_node != 0 ||
+        oem_shadow_decoder_last_result !=
+            OEM_SHADOW_WAKEUP_NONE) {
+        printf("FAIL\\n");
+        oem_shadow_decoder_observer_enabled = 0;
+        return -1;
+    }
+
+    printf("REJECT BEFORE SHADOW [OK]\\n");
+
+
+    oem_shadow_decoder_observer_enabled = 0;
+
+    printf("\\n");
+    printf("===== STAGE 6C RESULT =====\\n");
+    printf("[+] SERIAL API FRAME       OK\\n");
+    printf("[+] APP CMD DECODER        OK\\n");
+    printf("[+] SOURCE NODE            OK\\n");
+    printf("[+] COMMAND LENGTH         OK\\n");
+    printf("[+] SHADOW HOOK            OK\\n");
+    printf("[+] INVALID LENGTH GUARD   OK\\n");
+    printf("[+] SHADOW TX              BLOCKED\\n");
+    printf("\\n");
+    printf("[+] RX FRAME -> DECODER -> SHADOW OK\\n");
+    printf("========================================\\n");
 
     return 0;
 }
@@ -6144,7 +6604,7 @@ static void usage(const char *prog)
         "--add-node-loop-selftest|"
         "--add-node-transaction-selftest|"
         "--add-node-failure-selftest|--add-node-real|"
-        "--listen|--oem-cmdq-selftest|--oem-wakeup-selftest|--oem-wakeup-pipeline-selftest|--oem-cmdq-transaction-selftest|--oem-wakeup-e2e-selftest|--send-data-selftest|"
+        "--listen|--oem-cmdq-selftest|--oem-wakeup-selftest|--oem-wakeup-pipeline-selftest|--oem-cmdq-transaction-selftest|--oem-wakeup-e2e-selftest|--oem-rx-shadow-selftest|--send-data-selftest|"
         "--send-data-transaction-selftest|"
         "--send-data-callback-selftest|"
         "--send-data-wait-selftest|"
@@ -6211,6 +6671,8 @@ int main(int argc, char **argv)
             mode = 30;
         else if (!strcmp(argv[1], "--oem-wakeup-e2e-selftest"))
             mode = 31;
+        else if (!strcmp(argv[1], "--oem-rx-shadow-selftest"))
+            mode = 32;
         else if (!strcmp(argv[1], "--send-data-selftest"))
             mode = 20;
         else if (!strcmp(argv[1], "--send-data-transaction-selftest"))
@@ -6330,6 +6792,7 @@ int main(int argc, char **argv)
                         mode == 29 ? "OEM_WAKEUP_PIPELINE_SELFTEST" :
                         mode == 30 ? "OEM_CMDQ_TRANSACTION_SELFTEST" :
                         mode == 31 ? "OEM_WAKEUP_E2E_SELFTEST" :
+                        mode == 32 ? "OEM_RX_DECODER_SHADOW_SELFTEST" :
                         "PREPARE_ONLY");
 
     printf("========================================\n");
@@ -6371,6 +6834,21 @@ int main(int argc, char **argv)
      */
     if (mode == 31) {
         rc = run_oem_wakeup_e2e_selftest();
+
+        printf("\n[+] resultado: %s\n",
+               rc == 0 ? "OK" : "ERROR");
+
+        return rc == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+
+    /*
+     * V7.12 STAGE 6D RX FRAME -> DECODER -> SHADOW SELFTEST.
+     *
+     * OFFLINE y deliberadamente antes de setup_serial().
+     * No abre ttyACM0 y no transmite Z-Wave.
+     */
+    if (mode == 32) {
+        rc = run_oem_rx_decoder_shadow_selftest();
 
         printf("\n[+] resultado: %s\n",
                rc == 0 ? "OK" : "ERROR");
