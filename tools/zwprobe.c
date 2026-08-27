@@ -5256,12 +5256,223 @@ static int oem_wakeup_pipeline_run(
            entry->len);
 
     /*
-     * Modelo de dequeue:
+     * V7.12 STAGE 4:
      *
-     * una vez extraido el comando para envio,
-     * la entrada queda vacia.
+     * PEEK solamente.
+     *
+     * La CMDQ permanece intacta mientras se intenta
+     * la transmision. El dequeue solo puede ocurrir
+     * despues de TRANSMIT_COMPLETE_OK.
      */
-    memset(entry, 0, sizeof(*entry));
+    return 0;
+}
+
+
+
+/*
+ * V7.12 STAGE 4 - TRANSACTIONAL OEM CMDQ
+ *
+ * PREPARE:
+ *     el pipeline hace PEEK y conserva CMDQ.
+ *
+ * COMMIT:
+ *     TRANSMIT_COMPLETE_OK elimina CMDQ.
+ *
+ * ROLLBACK/PRESERVE:
+ *     fallo de transporte conserva CMDQ.
+ *
+ * OFFLINE MODEL ONLY.
+ */
+
+enum oem_cmdq_tx_result {
+    OEM_CMDQ_TX_FAILED = 0,
+    OEM_CMDQ_TX_COMPLETE_OK = 1
+};
+
+
+static int oem_cmdq_transaction_finish(
+        struct oem_cmdq_entry *entry,
+        enum oem_cmdq_tx_result tx_result)
+{
+    if (entry == NULL)
+        return -1;
+
+    if (entry->len == 0 ||
+        entry->len > OEM_CMDQ_COMMAND_MAX)
+        return -1;
+
+    if (tx_result == OEM_CMDQ_TX_COMPLETE_OK) {
+        memset(entry, 0, sizeof(*entry));
+        return 0;
+    }
+
+    if (tx_result == OEM_CMDQ_TX_FAILED) {
+        /*
+         * Preserve exact queue contents.
+         */
+        return 0;
+    }
+
+    return -1;
+}
+
+
+static int run_oem_cmdq_transaction_selftest(void)
+{
+    static const uint8_t wake_notification[] = {
+        0x84, 0x07
+    };
+
+    static const uint8_t pending_command[] = {
+        0x84, 0x08
+    };
+
+    struct oem_cmdq_entry entry;
+    struct oem_cmdq_entry before;
+    struct oem_wakeup_pipeline_result result;
+    int rc;
+
+    printf("========================================\n");
+    printf(" V7.12 OEM CMDQ TRANSACTION SELFTEST\n");
+    printf("========================================\n");
+    printf("[+] OFFLINE ONLY\n");
+    printf("[+] NO ttyACM0\n");
+    printf("[+] NO Serial API REAL\n");
+    printf("[+] NO Z-WAVE REAL\n");
+    printf("\n");
+
+
+    /*
+     * TEST 1:
+     * PREPARE/PEEK debe conservar la cola.
+     */
+    if (oem_cmdq_entry_build(
+            &entry,
+            pending_command,
+            sizeof(pending_command)) != 0)
+        return -1;
+
+    before = entry;
+
+    rc = oem_wakeup_pipeline_run(
+        4,
+        4,
+        wake_notification,
+        sizeof(wake_notification),
+        &entry,
+        &result);
+
+    printf("[TEST1] PREPARE / PEEK          : ");
+
+    if (rc != 0 ||
+        result.action != OEM_WAKEUP_ACTION_SEND ||
+        result.node_id != 4 ||
+        result.command_len != 2 ||
+        result.command[0] != 0x84 ||
+        result.command[1] != 0x08 ||
+        memcmp(&entry, &before, sizeof(entry)) != 0) {
+        printf("FAIL\n");
+        return -1;
+    }
+
+    printf("CMDQ PRESERVED [OK]\n");
+
+
+    /*
+     * TEST 2:
+     * transporte correcto -> COMMIT.
+     */
+    rc = oem_cmdq_transaction_finish(
+        &entry,
+        OEM_CMDQ_TX_COMPLETE_OK);
+
+    printf("[TEST2] TRANSMIT_COMPLETE_OK    : ");
+
+    if (rc != 0 || entry.len != 0) {
+        printf("FAIL\n");
+        return -1;
+    }
+
+    printf("COMMIT / CMDQ EMPTY [OK]\n");
+
+
+    /*
+     * TEST 3:
+     * fallo de transporte -> preservar byte por byte.
+     */
+    if (oem_cmdq_entry_build(
+            &entry,
+            pending_command,
+            sizeof(pending_command)) != 0)
+        return -1;
+
+    before = entry;
+
+    rc = oem_cmdq_transaction_finish(
+        &entry,
+        OEM_CMDQ_TX_FAILED);
+
+    printf("[TEST3] TRANSPORT FAILURE        : ");
+
+    if (rc != 0 ||
+        memcmp(&entry, &before, sizeof(entry)) != 0) {
+        printf("FAIL\n");
+        return -1;
+    }
+
+    printf("ROLLBACK / CMDQ PRESERVED [OK]\n");
+
+
+    /*
+     * TEST 4:
+     * resultado desconocido -> rechazar y preservar.
+     */
+    before = entry;
+
+    rc = oem_cmdq_transaction_finish(
+        &entry,
+        (enum oem_cmdq_tx_result)99);
+
+    printf("[TEST4] UNKNOWN TX RESULT        : ");
+
+    if (rc == 0 ||
+        memcmp(&entry, &before, sizeof(entry)) != 0) {
+        printf("FAIL\n");
+        return -1;
+    }
+
+    printf("REJECT + CMDQ PRESERVED [OK]\n");
+
+
+    /*
+     * TEST 5:
+     * no existe nada que COMMITear.
+     */
+    memset(&entry, 0, sizeof(entry));
+
+    rc = oem_cmdq_transaction_finish(
+        &entry,
+        OEM_CMDQ_TX_COMPLETE_OK);
+
+    printf("[TEST5] COMMIT EMPTY CMDQ        : ");
+
+    if (rc == 0) {
+        printf("FAIL\n");
+        return -1;
+    }
+
+    printf("REJECT [OK]\n");
+
+
+    printf("\n");
+    printf("===== TRANSACTION MODEL RESULT =====\n");
+    printf("[+] PREPARE preserves CMDQ       OK\n");
+    printf("[+] SUCCESS commits CMDQ         OK\n");
+    printf("[+] FAILURE preserves CMDQ       OK\n");
+    printf("[+] UNKNOWN preserves CMDQ       OK\n");
+    printf("\n");
+    printf("[+] OEM CMDQ TRANSACTION MODEL OK\n");
+    printf("========================================\n");
 
     return 0;
 }
@@ -5356,12 +5567,12 @@ static int run_oem_wakeup_pipeline_selftest(void)
            result.command[0],
            result.command[1]);
 
-    if (entry.len != 0) {
-        printf("[TEST1] DEQUEUE                 : FAIL\n");
+    if (entry.len != 2) {
+        printf("[TEST1] PEEK                    : FAIL\n");
         return -1;
     }
 
-    printf("[TEST1] DEQUEUE                 : CMDQ EMPTY [OK]\n");
+    printf("[TEST1] PEEK                    : CMDQ PRESERVED [OK]\n");
 
 
     /*
@@ -5450,12 +5661,12 @@ static int run_oem_wakeup_pipeline_selftest(void)
         result.command_len != 2 ||
         result.command[0] != 0x80 ||
         result.command[1] != 0x02 ||
-        entry.len != 0) {
+        entry.len != 2) {
         printf("FAIL\n");
         return -1;
     }
 
-    printf("SEND + DEQUEUE [OK]\n");
+    printf("SEND + CMDQ PRESERVED [OK]\n");
 
 
     /*
@@ -5518,7 +5729,7 @@ static int run_oem_wakeup_pipeline_selftest(void)
     printf("[+] WAKE-UP MATCH        OK\n");
     printf("[+] SEND DECISION        OK\n");
     printf("[+] COMMAND EXTRACTION   OK\n");
-    printf("[+] DEQUEUE              OK\n");
+    printf("[+] PEEK / PRESERVE      OK\n");
     printf("[+] QUEUE PRESERVATION   OK\n");
     printf("\n");
     printf("[+] OEM WAKE-UP PIPELINE OFFLINE OK\n");
@@ -5542,7 +5753,7 @@ static void usage(const char *prog)
         "--add-node-loop-selftest|"
         "--add-node-transaction-selftest|"
         "--add-node-failure-selftest|--add-node-real|"
-        "--listen|--oem-cmdq-selftest|--oem-wakeup-selftest|--oem-wakeup-pipeline-selftest|--send-data-selftest|"
+        "--listen|--oem-cmdq-selftest|--oem-wakeup-selftest|--oem-wakeup-pipeline-selftest|--oem-cmdq-transaction-selftest|--send-data-selftest|"
         "--send-data-transaction-selftest|"
         "--send-data-callback-selftest|"
         "--send-data-wait-selftest|"
@@ -5605,6 +5816,8 @@ int main(int argc, char **argv)
             mode = 28;
         else if (!strcmp(argv[1], "--oem-wakeup-pipeline-selftest"))
             mode = 29;
+        else if (!strcmp(argv[1], "--oem-cmdq-transaction-selftest"))
+            mode = 30;
         else if (!strcmp(argv[1], "--send-data-selftest"))
             mode = 20;
         else if (!strcmp(argv[1], "--send-data-transaction-selftest"))
@@ -5722,6 +5935,7 @@ int main(int argc, char **argv)
                         mode == 27 ? "OEM_CMDQ_MODEL_SELFTEST" :
                         mode == 28 ? "OEM_WAKEUP_DECISION_SELFTEST" :
                         mode == 29 ? "OEM_WAKEUP_PIPELINE_SELFTEST" :
+                        mode == 30 ? "OEM_CMDQ_TRANSACTION_SELFTEST" :
                         "PREPARE_ONLY");
 
     printf("========================================\n");
@@ -5749,6 +5963,20 @@ int main(int argc, char **argv)
      */
     if (mode == 29) {
         rc = run_oem_wakeup_pipeline_selftest();
+
+        printf("\n[+] resultado: %s\n",
+               rc == 0 ? "OK" : "ERROR");
+
+        return rc == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+
+    /*
+     * V7.12 STAGE 4 TRANSACTIONAL OEM CMDQ SELFTEST.
+     *
+     * OFFLINE y deliberadamente antes de setup_serial().
+     */
+    if (mode == 30) {
+        rc = run_oem_cmdq_transaction_selftest();
 
         printf("\n[+] resultado: %s\n",
                rc == 0 ? "OK" : "ERROR");
