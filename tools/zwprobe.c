@@ -7411,6 +7411,498 @@ static int run_oem_wakeup_pipeline_selftest(void)
  * NO Z-WAVE real.
  */
 
+
+/*
+ * ============================================================
+ * V7.12 STAGE 9C.2
+ * GATED SHADOW CANDIDATE -> REAL TRANSPORT -> SOCKETPAIR
+ * ============================================================
+ *
+ * Integra:
+ *
+ *   shadow CMDQ
+ *       ->
+ *   wake-up candidate
+ *       ->
+ *   transport gate
+ *       ->
+ *   zw_send_data_transaction() REAL
+ *       ->
+ *   socketpair() / controlador simulado
+ *       ->
+ *   COMMIT / PRESERVE
+ *
+ * IMPORTANTE:
+ *
+ * El transporte ejecutado es el REAL, pero el descriptor
+ * pertenece exclusivamente a socketpair(AF_UNIX).
+ *
+ * NO setup_serial().
+ * NO ttyACM0.
+ * NO radio Z-Wave.
+ */
+
+
+static int run_oem_gated_transport_case(
+        uint8_t tx_status,
+        int expect_commit)
+{
+    static const uint8_t wake_event[] = {
+        0x84, 0x07
+    };
+
+    static const uint8_t pending_command[] = {
+        0x84, 0x08
+    };
+
+    struct oem_cmdq_entry before;
+
+    int sv[2] = {-1, -1};
+    pid_t pid;
+    int status = 0;
+    int tx_rc;
+    int finish_rc;
+    int rc = 1;
+
+    uint8_t response[] = {
+        SOF, 0x04, RESPONSE, 0x13, 0x01, 0x00
+    };
+
+    uint8_t callback[] = {
+        SOF, 0x05, REQUEST, 0x13, 0x01, 0x00, 0x00
+    };
+
+
+    oem_shadow_cmdq_reset();
+    oem_transport_gate_disarm();
+
+
+    /*
+     * PREPARE SHADOW CMDQ.
+     */
+    if (oem_shadow_cmdq_arm(
+            4,
+            pending_command,
+            sizeof(pending_command)) != 0) {
+        printf("[-] 9C CMDQ arm fallo\n");
+        return 1;
+    }
+
+
+    /*
+     * WAKE -> CANDIDATE.
+     */
+    if (oem_shadow_cmdq_consider_wakeup(
+            4,
+            wake_event,
+            sizeof(wake_event)) != 1) {
+        printf("[-] 9C candidate prepare fallo\n");
+        oem_shadow_cmdq_reset();
+        return 1;
+    }
+
+    if (!oem_shadow_candidate_valid ||
+        oem_shadow_candidate.node_id != 4 ||
+        oem_shadow_candidate.command_len !=
+            sizeof(pending_command) ||
+        memcmp(oem_shadow_candidate.command,
+               pending_command,
+               sizeof(pending_command)) != 0) {
+        printf("[-] 9C candidate invalido\n");
+        oem_shadow_cmdq_reset();
+        return 1;
+    }
+
+    before = oem_shadow_cmdq_entry;
+
+
+    /*
+     * La prueba nunca puede alcanzar el transporte
+     * mientras la puerta este DISARMED.
+     */
+    if (oem_transport_gate_candidate_allowed() != 0) {
+        printf("[-] 9C DISARMED permitio candidato\n");
+        oem_shadow_cmdq_reset();
+        return 1;
+    }
+
+    if (memcmp(&oem_shadow_cmdq_entry,
+               &before,
+               sizeof(before)) != 0) {
+        printf("[-] 9C DISARMED altero CMDQ\n");
+        oem_shadow_cmdq_reset();
+        return 1;
+    }
+
+    printf("[+] GATE DISARMED              : BLOCKED [OK]\n");
+
+
+    /*
+     * ARM explicito.
+     */
+    oem_transport_gate_arm();
+
+    if (oem_transport_gate_candidate_allowed() != 1) {
+        printf("[-] 9C ARMED no autorizo candidato\n");
+        oem_transport_gate_disarm();
+        oem_shadow_cmdq_reset();
+        return 1;
+    }
+
+    printf("[+] GATE ARMED                 : ALLOWED [OK]\n");
+
+
+    /*
+     * Construimos RESPONSE y CALLBACK simulados.
+     */
+    response[sizeof(response) - 1] =
+        zw_checksum(&response[1], response[1]);
+
+    callback[5] = tx_status;
+
+    callback[sizeof(callback) - 1] =
+        zw_checksum(&callback[1], callback[1]);
+
+
+    /*
+     * El FD que recibira zw_send_data_transaction()
+     * es EXCLUSIVAMENTE un socket UNIX.
+     */
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) < 0) {
+        perror("socketpair");
+        oem_transport_gate_disarm();
+        oem_shadow_cmdq_reset();
+        return 1;
+    }
+
+    pid = fork();
+
+    if (pid < 0) {
+        perror("fork");
+        close(sv[0]);
+        close(sv[1]);
+        oem_transport_gate_disarm();
+        oem_shadow_cmdq_reset();
+        return 1;
+    }
+
+
+    /*
+     * CHILD = controlador Serial API simulado.
+     */
+    if (pid == 0) {
+        uint8_t frame[MAX_FRAME];
+        uint8_t b = 0;
+        size_t pos = 0;
+        size_t total = 0;
+
+        close(sv[1]);
+
+        if (read_byte_timeout(
+                sv[0],
+                &frame[0],
+                1000) != 1 ||
+            frame[0] != SOF)
+            _exit(10);
+
+        if (read_byte_timeout(
+                sv[0],
+                &frame[1],
+                1000) != 1)
+            _exit(11);
+
+        total = (size_t)frame[1] + 2;
+
+        if (total > sizeof(frame) || total < 5)
+            _exit(12);
+
+        pos = 2;
+
+        while (pos < total) {
+            if (read_byte_timeout(
+                    sv[0],
+                    &frame[pos],
+                    1000) != 1)
+                _exit(13);
+
+            pos++;
+        }
+
+
+        /*
+         * Validacion estricta de la trama que saldria:
+         *
+         * REQUEST / ZW_SEND_DATA
+         * NODE     4
+         * LEN      2
+         * CMD      84 08
+         * TXOPT    25
+         * CBID     01
+         */
+        if (frame[2] != REQUEST ||
+            frame[3] != 0x13 ||
+            frame[4] != 0x04 ||
+            frame[5] != 0x02 ||
+            frame[6] != 0x84 ||
+            frame[7] != 0x08 ||
+            frame[8] != 0x25 ||
+            frame[9] != 0x01)
+            _exit(14);
+
+        /*
+         * Verificamos tambien checksum completo.
+         */
+        if (frame[total - 1] !=
+            zw_checksum(&frame[1], frame[1]))
+            _exit(15);
+
+
+        /*
+         * ACK de la peticion.
+         */
+        b = ACK;
+
+        if (write_all(sv[0], &b, 1) < 0)
+            _exit(16);
+
+
+        /*
+         * RESPONSE/FUNC_ID 13 aceptada.
+         */
+        if (write_all(
+                sv[0],
+                response,
+                sizeof(response)) < 0)
+            _exit(17);
+
+
+        /*
+         * El host debe ACKear RESPONSE.
+         */
+        if (read_byte_timeout(
+                sv[0],
+                &b,
+                1000) != 1 ||
+            b != ACK)
+            _exit(18);
+
+
+        /*
+         * CALLBACK configurable:
+         * 00 = TRANSMIT_COMPLETE_OK
+         * 01 = fallo simulado
+         */
+        if (write_all(
+                sv[0],
+                callback,
+                sizeof(callback)) < 0)
+            _exit(19);
+
+
+        /*
+         * El host debe ACKear CALLBACK.
+         */
+        if (read_byte_timeout(
+                sv[0],
+                &b,
+                1000) != 1 ||
+            b != ACK)
+            _exit(20);
+
+        close(sv[0]);
+        _exit(0);
+    }
+
+
+    /*
+     * PARENT.
+     *
+     * AQUI SI ejecutamos la funcion de transporte REAL.
+     *
+     * Pero sv[1] es un socket AF_UNIX.
+     */
+    close(sv[0]);
+    sv[0] = -1;
+
+    tx_rc = zw_send_data_transaction(
+        sv[1],
+        oem_shadow_candidate.node_id,
+        oem_shadow_candidate.command,
+        oem_shadow_candidate.command_len,
+        0x25,
+        0x01);
+
+    close(sv[1]);
+    sv[1] = -1;
+
+
+    if (waitpid(pid, &status, 0) < 0) {
+        perror("waitpid");
+        oem_transport_gate_disarm();
+        oem_shadow_cmdq_reset();
+        return 1;
+    }
+
+    if (!WIFEXITED(status)) {
+        printf("[-] 9C simulator termino anormalmente\n");
+        oem_transport_gate_disarm();
+        oem_shadow_cmdq_reset();
+        return 1;
+    }
+
+    if (WEXITSTATUS(status) != 0) {
+        printf("[-] 9C simulator exit=%d\n",
+               WEXITSTATUS(status));
+        oem_transport_gate_disarm();
+        oem_shadow_cmdq_reset();
+        return 1;
+    }
+
+
+    /*
+     * Convertimos el resultado REAL del transporte
+     * al resultado transaccional de CMDQ.
+     */
+    if (tx_rc == 0) {
+        finish_rc = oem_shadow_candidate_finish(
+            OEM_CMDQ_TX_COMPLETE_OK);
+    } else {
+        finish_rc = oem_shadow_candidate_finish(
+            OEM_CMDQ_TX_FAILED);
+    }
+
+    if (finish_rc != 0) {
+        printf("[-] 9C transaction finish fallo\n");
+        oem_transport_gate_disarm();
+        oem_shadow_cmdq_reset();
+        return 1;
+    }
+
+
+    if (expect_commit) {
+        if (tx_rc != 0) {
+            printf("[-] 9C esperaba TX success\n");
+            oem_transport_gate_disarm();
+            oem_shadow_cmdq_reset();
+            return 1;
+        }
+
+        if (oem_shadow_candidate_valid) {
+            printf("[-] 9C COMMIT dejo candidate\n");
+            oem_transport_gate_disarm();
+            oem_shadow_cmdq_reset();
+            return 1;
+        }
+
+        if (oem_shadow_cmdq_entry.len != 0) {
+            printf("[-] 9C COMMIT no vacio CMDQ\n");
+            oem_transport_gate_disarm();
+            oem_shadow_cmdq_reset();
+            return 1;
+        }
+
+        printf("[+] REAL TRANSPORT RESULT      : SUCCESS [OK]\n");
+        printf("[+] TRANSACTION RESULT         : COMMIT [OK]\n");
+
+    } else {
+        if (tx_rc == 0) {
+            printf("[-] 9C esperaba TX failure\n");
+            oem_transport_gate_disarm();
+            oem_shadow_cmdq_reset();
+            return 1;
+        }
+
+        if (!oem_shadow_candidate_valid) {
+            printf("[-] 9C FAILURE perdio candidate\n");
+            oem_transport_gate_disarm();
+            oem_shadow_cmdq_reset();
+            return 1;
+        }
+
+        if (memcmp(&oem_shadow_cmdq_entry,
+                   &before,
+                   sizeof(before)) != 0) {
+            printf("[-] 9C FAILURE altero CMDQ\n");
+            oem_transport_gate_disarm();
+            oem_shadow_cmdq_reset();
+            return 1;
+        }
+
+        printf("[+] REAL TRANSPORT RESULT      : FAILURE [OK]\n");
+        printf("[+] TRANSACTION RESULT         : PRESERVE [OK]\n");
+    }
+
+
+    oem_transport_gate_disarm();
+    oem_shadow_cmdq_reset();
+
+    rc = 0;
+
+    return rc;
+}
+
+
+static int run_oem_gated_real_transport_selftest(void)
+{
+    int rc;
+
+    printf("========================================\n");
+    printf(" V7.12 GATED REAL TRANSPORT SELFTEST\n");
+    printf("========================================\n");
+    printf("[+] OFFLINE ONLY\n");
+    printf("[+] REAL zw_send_data_transaction()\n");
+    printf("[+] FD = socketpair(AF_UNIX)\n");
+    printf("[+] COMMAND = NODE4 / 84 08\n");
+    printf("[+] DEFAULT GATE = DISARMED\n");
+    printf("[+] NO setup_serial()\n");
+    printf("[+] NO ttyACM0\n");
+    printf("[+] NO RADIO Z-WAVE\n");
+
+
+    printf("\n");
+    printf("===== CASE 1 — CALLBACK SUCCESS =====\n");
+
+    rc = run_oem_gated_transport_case(0x00, 1);
+
+    if (rc != 0) {
+        printf("[-] CASE 1 FAIL\n");
+        return 1;
+    }
+
+
+    printf("\n");
+    printf("===== CASE 2 — CALLBACK FAILURE =====\n");
+
+    rc = run_oem_gated_transport_case(0x01, 0);
+
+    if (rc != 0) {
+        printf("[-] CASE 2 FAIL\n");
+        return 1;
+    }
+
+
+    printf("\n");
+    printf("===== STAGE 9C.2 RESULT =====\n");
+    printf("[+] SHADOW CMDQ               OK\n");
+    printf("[+] WAKE CANDIDATE            OK\n");
+    printf("[+] DISARMED -> BLOCK         OK\n");
+    printf("[+] ARMED -> ALLOW            OK\n");
+    printf("[+] REAL TRANSPORT FUNCTION   OK\n");
+    printf("[+] EXACT NODE4 / 84 08       OK\n");
+    printf("[+] TX OPTIONS 0x25           OK\n");
+    printf("[+] CALLBACK ID 0x01          OK\n");
+    printf("[+] FRAME CHECKSUM            OK\n");
+    printf("[+] CALLBACK SUCCESS          OK\n");
+    printf("[+] CALLBACK FAILURE          OK\n");
+    printf("[+] SUCCESS -> COMMIT         OK\n");
+    printf("[+] FAILURE -> PRESERVE       OK\n");
+    printf("[+] PHYSICAL Z-WAVE TX        NONE\n");
+    printf("========================================\n");
+
+    return 0;
+}
+
+
 static int run_oem_wakeup_e2e_case(uint8_t tx_status,
                                    int expect_commit)
 {
@@ -7794,7 +8286,7 @@ static void usage(const char *prog)
         "--add-node-loop-selftest|"
         "--add-node-transaction-selftest|"
         "--add-node-failure-selftest|--add-node-real|"
-        "--listen|--oem-cmdq-selftest|--oem-wakeup-selftest|--oem-wakeup-pipeline-selftest|--oem-cmdq-transaction-selftest|--oem-wakeup-e2e-selftest|--oem-rx-shadow-selftest|--oem-shadow-cmdq-selftest|--oem-shadow-transaction-selftest|--oem-full-rx-shadow-selftest|--oem-transport-gate-selftest|--send-data-selftest|"
+        "--listen|--oem-cmdq-selftest|--oem-wakeup-selftest|--oem-wakeup-pipeline-selftest|--oem-cmdq-transaction-selftest|--oem-wakeup-e2e-selftest|--oem-rx-shadow-selftest|--oem-shadow-cmdq-selftest|--oem-shadow-transaction-selftest|--oem-full-rx-shadow-selftest|--oem-transport-gate-selftest|--oem-gated-transport-selftest|--send-data-selftest|"
         "--send-data-transaction-selftest|"
         "--send-data-callback-selftest|"
         "--send-data-wait-selftest|"
@@ -7871,6 +8363,8 @@ int main(int argc, char **argv)
             mode = 35;
         else if (!strcmp(argv[1], "--oem-transport-gate-selftest"))
             mode = 36;
+        else if (!strcmp(argv[1], "--oem-gated-transport-selftest"))
+            mode = 37;
         else if (!strcmp(argv[1], "--send-data-selftest"))
             mode = 20;
         else if (!strcmp(argv[1], "--send-data-transaction-selftest"))
@@ -7995,6 +8489,7 @@ int main(int argc, char **argv)
                         mode == 34 ? "OEM_SHADOW_TRANSACTION_SELFTEST" :
                         mode == 35 ? "OEM_FULL_RX_SHADOW_SELFTEST" :
                         mode == 36 ? "OEM_TRANSPORT_GATE_SELFTEST" :
+                        mode == 37 ? "OEM_GATED_REAL_TRANSPORT_SELFTEST" :
                         "PREPARE_ONLY");
 
     printf("========================================\n");
@@ -8042,6 +8537,24 @@ int main(int argc, char **argv)
 
         return rc == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     }
+
+    /*
+     * V7.12 STAGE 9C.2 GATED REAL TRANSPORT SELFTEST.
+     *
+     * Deliberadamente antes de setup_serial().
+     *
+     * zw_send_data_transaction() se ejecuta exclusivamente
+     * contra socketpair(AF_UNIX).
+     */
+    if (mode == 37) {
+        rc = run_oem_gated_real_transport_selftest();
+
+        printf("\n[+] resultado: %s\n",
+               rc == 0 ? "OK" : "ERROR");
+
+        return rc == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+
 
     /*
      * V7.12 STAGE 9B OEM TRANSPORT GATE SELFTEST.
