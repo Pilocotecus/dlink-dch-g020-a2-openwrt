@@ -6210,6 +6210,290 @@ static int oem_cmdq_transaction_finish(
  * conectar, en una etapa posterior, el transporte real.
  */
 
+
+/*
+ * ============================================================
+ * V7.12 STAGE 9B - OEM WAKE-UP TRANSPORT ARM GATE
+ * ============================================================
+ *
+ * Segunda barrera de seguridad entre:
+ *
+ *      RX -> decoder -> CMDQ -> candidate
+ *
+ * y el futuro transporte real.
+ *
+ * Estado por defecto:
+ *
+ *      DISARMED
+ *
+ * Incluso cuando esta ARMED, Stage 9B NO transmite.
+ * Solo autoriza logicamente que un candidato podria avanzar
+ * hacia una etapa posterior.
+ *
+ * NO ttyACM0.
+ * NO zw_send_data_transaction().
+ */
+
+enum oem_transport_gate_state {
+    OEM_TRANSPORT_GATE_DISARMED = 0,
+    OEM_TRANSPORT_GATE_ARMED = 1
+};
+
+static enum oem_transport_gate_state
+    oem_transport_gate_state = OEM_TRANSPORT_GATE_DISARMED;
+
+
+static void oem_transport_gate_disarm(void)
+{
+    oem_transport_gate_state = OEM_TRANSPORT_GATE_DISARMED;
+}
+
+
+static void oem_transport_gate_arm(void)
+{
+    oem_transport_gate_state = OEM_TRANSPORT_GATE_ARMED;
+}
+
+
+static int oem_transport_gate_candidate_allowed(void)
+{
+    if (oem_transport_gate_state != OEM_TRANSPORT_GATE_ARMED)
+        return 0;
+
+    if (!oem_shadow_cmdq_enabled)
+        return 0;
+
+    if (!oem_shadow_candidate_valid)
+        return 0;
+
+    if (oem_shadow_candidate.action != OEM_WAKEUP_ACTION_SEND)
+        return 0;
+
+    if (oem_shadow_candidate.node_id == 0 ||
+        oem_shadow_candidate.node_id > 232)
+        return 0;
+
+    if (oem_shadow_candidate.command_len == 0 ||
+        oem_shadow_candidate.command_len > OEM_CMDQ_COMMAND_MAX)
+        return 0;
+
+    if (oem_shadow_cmdq_entry.len !=
+        oem_shadow_candidate.command_len)
+        return 0;
+
+    if (memcmp(oem_shadow_cmdq_entry.command,
+               oem_shadow_candidate.command,
+               oem_shadow_candidate.command_len) != 0)
+        return 0;
+
+    /*
+     * IMPORTANTE:
+     *
+     * ALLOWED significa exclusivamente:
+     *
+     *   "el candidato ha superado la puerta logica".
+     *
+     * NO significa que se transmita.
+     */
+    return 1;
+}
+
+
+static int run_oem_transport_gate_selftest(void)
+{
+    static const uint8_t wake_event[] = {
+        0x84, 0x07
+    };
+
+    static const uint8_t pending_command[] = {
+        0x84, 0x08
+    };
+
+    struct oem_cmdq_entry before;
+
+    printf("========================================\n");
+    printf(" V7.12 OEM TRANSPORT ARM GATE\n");
+    printf("========================================\n");
+    printf("[+] OFFLINE ONLY\n");
+    printf("[+] DEFAULT = DISARMED\n");
+    printf("[+] NO ttyACM0\n");
+    printf("[+] NO zw_send_data_transaction()\n");
+    printf("[+] REAL TX BLOCKED\n");
+    printf("\n");
+
+
+    /*
+     * TEST1:
+     * Estado inicial/desarmado debe bloquear siempre.
+     */
+    oem_shadow_cmdq_reset();
+    oem_transport_gate_disarm();
+
+    if (oem_transport_gate_candidate_allowed() != 0) {
+        printf("[TEST1] DEFAULT DISARMED        : FAIL\n");
+        return -1;
+    }
+
+    printf("[TEST1] DEFAULT DISARMED        : BLOCKED [OK]\n");
+
+
+    /*
+     * TEST2:
+     * Creamos un candidato valido pero dejamos gate DISARMED.
+     */
+    if (oem_shadow_cmdq_arm(
+            4,
+            pending_command,
+            sizeof(pending_command)) != 0) {
+        printf("[TEST2] ARM SHADOW CMDQ         : FAIL\n");
+        return -1;
+    }
+
+    if (oem_shadow_cmdq_consider_wakeup(
+            4,
+            wake_event,
+            sizeof(wake_event)) != 1) {
+        printf("[TEST2] PREPARE CANDIDATE       : FAIL\n");
+        oem_shadow_cmdq_reset();
+        return -1;
+    }
+
+    before = oem_shadow_cmdq_entry;
+
+    if (oem_transport_gate_candidate_allowed() != 0) {
+        printf("[TEST2] VALID + DISARMED        : FAIL\n");
+        oem_shadow_cmdq_reset();
+        return -1;
+    }
+
+    if (memcmp(&oem_shadow_cmdq_entry,
+               &before,
+               sizeof(before)) != 0) {
+        printf("[TEST2] CMDQ PRESERVE           : FAIL\n");
+        oem_shadow_cmdq_reset();
+        return -1;
+    }
+
+    printf("[TEST2] VALID + DISARMED        : BLOCKED [OK]\n");
+
+
+    /*
+     * TEST3:
+     * Mismo candidato + ARMED => ALLOWED logicamente.
+     *
+     * Sigue sin existir llamada de transporte.
+     */
+    oem_transport_gate_arm();
+
+    if (oem_transport_gate_candidate_allowed() != 1) {
+        printf("[TEST3] VALID + ARMED           : FAIL\n");
+        oem_transport_gate_disarm();
+        oem_shadow_cmdq_reset();
+        return -1;
+    }
+
+    if (memcmp(&oem_shadow_cmdq_entry,
+               &before,
+               sizeof(before)) != 0) {
+        printf("[TEST3] CMDQ PRESERVE           : FAIL\n");
+        oem_transport_gate_disarm();
+        oem_shadow_cmdq_reset();
+        return -1;
+    }
+
+    printf("[TEST3] VALID + ARMED           : ALLOWED [OK]\n");
+    printf("[TEST3] REAL TRANSPORT          : STILL BLOCKED [OK]\n");
+
+
+    /*
+     * TEST4:
+     * Desarmar vuelve a bloquear inmediatamente.
+     */
+    oem_transport_gate_disarm();
+
+    if (oem_transport_gate_candidate_allowed() != 0) {
+        printf("[TEST4] RE-DISARM              : FAIL\n");
+        oem_shadow_cmdq_reset();
+        return -1;
+    }
+
+    printf("[TEST4] RE-DISARM              : BLOCKED [OK]\n");
+
+
+    /*
+     * TEST5:
+     * ARMED sin candidato nunca autoriza.
+     */
+    oem_shadow_cmdq_reset();
+    oem_transport_gate_arm();
+
+    if (oem_transport_gate_candidate_allowed() != 0) {
+        printf("[TEST5] ARMED / NO CANDIDATE    : FAIL\n");
+        oem_transport_gate_disarm();
+        return -1;
+    }
+
+    printf("[TEST5] ARMED / NO CANDIDATE    : BLOCKED [OK]\n");
+
+
+    /*
+     * TEST6:
+     * Gate ARMED no debe saltarse mismatch CMDQ/candidate.
+     */
+    if (oem_shadow_cmdq_arm(
+            4,
+            pending_command,
+            sizeof(pending_command)) != 0) {
+        printf("[TEST6] ARM SHADOW CMDQ         : FAIL\n");
+        oem_transport_gate_disarm();
+        return -1;
+    }
+
+    if (oem_shadow_cmdq_consider_wakeup(
+            4,
+            wake_event,
+            sizeof(wake_event)) != 1) {
+        printf("[TEST6] PREPARE CANDIDATE       : FAIL\n");
+        oem_transport_gate_disarm();
+        oem_shadow_cmdq_reset();
+        return -1;
+    }
+
+    /*
+     * Introducimos divergencia deliberada.
+     */
+    oem_shadow_cmdq_entry.command[1] ^= 0x01;
+
+    if (oem_transport_gate_candidate_allowed() != 0) {
+        printf("[TEST6] ARMED + MISMATCH        : FAIL\n");
+        oem_transport_gate_disarm();
+        oem_shadow_cmdq_reset();
+        return -1;
+    }
+
+    printf("[TEST6] ARMED + MISMATCH        : BLOCKED [OK]\n");
+
+
+    oem_transport_gate_disarm();
+    oem_shadow_cmdq_reset();
+
+    printf("\n");
+    printf("===== STAGE 9B RESULT =====\n");
+    printf("[+] DEFAULT DISARMED          OK\n");
+    printf("[+] VALID/DISARMED -> BLOCK   OK\n");
+    printf("[+] VALID/ARMED -> ALLOW      OK\n");
+    printf("[+] RE-DISARM -> BLOCK        OK\n");
+    printf("[+] NO CANDIDATE -> BLOCK     OK\n");
+    printf("[+] MISMATCH -> BLOCK         OK\n");
+    printf("[+] CMDQ PRESERVED            OK\n");
+    printf("[+] REAL TRANSPORT            BLOCKED\n");
+    printf("[+] NO ttyACM0                OK\n");
+    printf("========================================\n");
+
+    return 0;
+}
+
+
 static int oem_shadow_candidate_finish(
         enum oem_cmdq_tx_result tx_result)
 {
@@ -7510,7 +7794,7 @@ static void usage(const char *prog)
         "--add-node-loop-selftest|"
         "--add-node-transaction-selftest|"
         "--add-node-failure-selftest|--add-node-real|"
-        "--listen|--oem-cmdq-selftest|--oem-wakeup-selftest|--oem-wakeup-pipeline-selftest|--oem-cmdq-transaction-selftest|--oem-wakeup-e2e-selftest|--oem-rx-shadow-selftest|--oem-shadow-cmdq-selftest|--oem-shadow-transaction-selftest|--oem-full-rx-shadow-selftest|--send-data-selftest|"
+        "--listen|--oem-cmdq-selftest|--oem-wakeup-selftest|--oem-wakeup-pipeline-selftest|--oem-cmdq-transaction-selftest|--oem-wakeup-e2e-selftest|--oem-rx-shadow-selftest|--oem-shadow-cmdq-selftest|--oem-shadow-transaction-selftest|--oem-full-rx-shadow-selftest|--oem-transport-gate-selftest|--send-data-selftest|"
         "--send-data-transaction-selftest|"
         "--send-data-callback-selftest|"
         "--send-data-wait-selftest|"
@@ -7585,6 +7869,8 @@ int main(int argc, char **argv)
             mode = 34;
         else if (!strcmp(argv[1], "--oem-full-rx-shadow-selftest"))
             mode = 35;
+        else if (!strcmp(argv[1], "--oem-transport-gate-selftest"))
+            mode = 36;
         else if (!strcmp(argv[1], "--send-data-selftest"))
             mode = 20;
         else if (!strcmp(argv[1], "--send-data-transaction-selftest"))
@@ -7708,6 +7994,7 @@ int main(int argc, char **argv)
                         mode == 33 ? "OEM_SHADOW_CMDQ_CANDIDATE_SELFTEST" :
                         mode == 34 ? "OEM_SHADOW_TRANSACTION_SELFTEST" :
                         mode == 35 ? "OEM_FULL_RX_SHADOW_SELFTEST" :
+                        mode == 36 ? "OEM_TRANSPORT_GATE_SELFTEST" :
                         "PREPARE_ONLY");
 
     printf("========================================\n");
@@ -7755,6 +8042,23 @@ int main(int argc, char **argv)
 
         return rc == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     }
+
+    /*
+     * V7.12 STAGE 9B OEM TRANSPORT GATE SELFTEST.
+     *
+     * OFFLINE y antes de setup_serial().
+     * NO abre ttyACM0.
+     * NO transmite Z-Wave.
+     */
+    if (mode == 36) {
+        rc = run_oem_transport_gate_selftest();
+
+        printf("\n[+] resultado: %s\n",
+               rc == 0 ? "OK" : "ERROR");
+
+        return rc == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+
 
     /*
      * V7.12 STAGE 8D FULL RX SHADOW INTEGRATION SELFTEST.
