@@ -6311,6 +6311,215 @@ static int oem_transport_gate_candidate_allowed(void)
 }
 
 
+/*
+ * ============================================================
+ * V7.12 STAGE 11B - STRICT FIRST HARDWARE TX AUTHORIZATION
+ * ============================================================
+ *
+ * Segunda barrera, deliberadamente mas estrecha que el gate
+ * generico Stage9.
+ *
+ * Autoriza EXCLUSIVAMENTE el primer candidato hardware:
+ *
+ *     Node 4
+ *     COMMAND_CLASS_WAKE_UP
+ *     WAKE_UP_NO_MORE_INFORMATION
+ *     84 08
+ *
+ * Esta funcion NO transmite.
+ * Esta funcion NO abre ttyACM0.
+ * Esta funcion NO hace COMMIT.
+ */
+static int oem_first_real_tx_candidate_allowed(void)
+{
+    static const uint8_t allowed_command[] = {
+        0x84, 0x08
+    };
+
+    if (!oem_transport_gate_candidate_allowed())
+        return 0;
+
+    if (!oem_shadow_candidate_valid)
+        return 0;
+
+    if (oem_shadow_candidate.node_id != 4)
+        return 0;
+
+    if (oem_shadow_candidate.command_len !=
+        sizeof(allowed_command))
+        return 0;
+
+    if (memcmp(oem_shadow_candidate.command,
+               allowed_command,
+               sizeof(allowed_command)) != 0)
+        return 0;
+
+    if (oem_shadow_cmdq_entry.len !=
+        sizeof(allowed_command))
+        return 0;
+
+    if (memcmp(oem_shadow_cmdq_entry.command,
+               allowed_command,
+               sizeof(allowed_command)) != 0)
+        return 0;
+
+    return 1;
+}
+
+
+static int run_oem_first_real_tx_gate_selftest(void)
+{
+    static const uint8_t wake_event[] = {
+        0x84, 0x07
+    };
+
+    static const uint8_t allowed_command[] = {
+        0x84, 0x08
+    };
+
+    struct oem_cmdq_entry before;
+
+    printf("========================================\n");
+    printf(" V7.12 FIRST REAL-TX STRICT GATE TEST\n");
+    printf("========================================\n");
+    printf("[+] OFFLINE ONLY\n");
+    printf("[+] Allowed Node            : 4\n");
+    printf("[+] Allowed command         : 84 08\n");
+    printf("[+] NO ttyACM0\n");
+    printf("[+] NO zw_send_data_transaction()\n");
+    printf("[+] NO Z-WAVE RF TX\n");
+    printf("\n");
+
+    oem_shadow_cmdq_reset();
+    oem_transport_gate_disarm();
+
+    if (oem_shadow_cmdq_arm(
+            4,
+            allowed_command,
+            sizeof(allowed_command)) != 0) {
+        printf("[TEST1] PREPARE               : FAIL\n");
+        return 1;
+    }
+
+    if (oem_shadow_cmdq_consider_wakeup(
+            4,
+            wake_event,
+            sizeof(wake_event)) != 1) {
+        printf("[TEST1] WAKE CANDIDATE        : FAIL\n");
+        oem_shadow_cmdq_reset();
+        return 1;
+    }
+
+    before = oem_shadow_cmdq_entry;
+
+    if (oem_first_real_tx_candidate_allowed() != 0) {
+        printf("[TEST1] DISARMED              : FAIL\n");
+        oem_shadow_cmdq_reset();
+        return 1;
+    }
+
+    printf("[TEST1] DISARMED              : BLOCKED [OK]\n");
+
+    oem_transport_gate_arm();
+
+    if (oem_first_real_tx_candidate_allowed() != 1) {
+        printf("[TEST2] NODE4 / 84 08         : FAIL\n");
+        oem_transport_gate_disarm();
+        oem_shadow_cmdq_reset();
+        return 1;
+    }
+
+    printf("[TEST2] NODE4 / 84 08         : ALLOWED [OK]\n");
+
+    oem_shadow_candidate.node_id = 3;
+
+    if (oem_first_real_tx_candidate_allowed() != 0) {
+        printf("[TEST3] WRONG NODE            : FAIL\n");
+        oem_transport_gate_disarm();
+        oem_shadow_cmdq_reset();
+        return 1;
+    }
+
+    printf("[TEST3] WRONG NODE            : BLOCKED [OK]\n");
+
+    oem_shadow_candidate.node_id = 4;
+    oem_shadow_candidate.command[1] = 0x07;
+
+    if (oem_first_real_tx_candidate_allowed() != 0) {
+        printf("[TEST4] WRONG COMMAND         : FAIL\n");
+        oem_transport_gate_disarm();
+        oem_shadow_cmdq_reset();
+        return 1;
+    }
+
+    printf("[TEST4] WRONG COMMAND         : BLOCKED [OK]\n");
+
+    oem_shadow_candidate.command[1] = 0x08;
+    oem_shadow_candidate.command_len = 1;
+
+    if (oem_first_real_tx_candidate_allowed() != 0) {
+        printf("[TEST5] WRONG LENGTH          : FAIL\n");
+        oem_transport_gate_disarm();
+        oem_shadow_cmdq_reset();
+        return 1;
+    }
+
+    printf("[TEST5] WRONG LENGTH          : BLOCKED [OK]\n");
+
+    oem_shadow_candidate.command_len = 2;
+    oem_shadow_cmdq_entry.command[1] = 0x07;
+
+    if (oem_first_real_tx_candidate_allowed() != 0) {
+        printf("[TEST6] CMDQ MISMATCH         : FAIL\n");
+        oem_transport_gate_disarm();
+        oem_shadow_cmdq_reset();
+        return 1;
+    }
+
+    printf("[TEST6] CMDQ MISMATCH         : BLOCKED [OK]\n");
+
+    oem_shadow_cmdq_entry = before;
+
+    if (oem_first_real_tx_candidate_allowed() != 1) {
+        printf("[TEST7] RESTORED EXACT        : FAIL\n");
+        oem_transport_gate_disarm();
+        oem_shadow_cmdq_reset();
+        return 1;
+    }
+
+    printf("[TEST7] RESTORED EXACT        : ALLOWED [OK]\n");
+
+    if (memcmp(&oem_shadow_cmdq_entry,
+               &before,
+               sizeof(before)) != 0) {
+        printf("[TEST8] CMDQ PRESERVE         : FAIL\n");
+        oem_transport_gate_disarm();
+        oem_shadow_cmdq_reset();
+        return 1;
+    }
+
+    printf("[TEST8] CMDQ PRESERVE         : OK\n");
+
+    oem_transport_gate_disarm();
+    oem_shadow_cmdq_reset();
+
+    printf("\n");
+    printf("===== STAGE 11B RESULT =====\n");
+    printf("[+] DEFAULT DISARMED          OK\n");
+    printf("[+] NODE4 / 84 08 ONLY        OK\n");
+    printf("[+] WRONG NODE BLOCKED        OK\n");
+    printf("[+] WRONG COMMAND BLOCKED     OK\n");
+    printf("[+] WRONG LENGTH BLOCKED      OK\n");
+    printf("[+] CMDQ MISMATCH BLOCKED     OK\n");
+    printf("[+] REAL TRANSPORT            NOT CONNECTED\n");
+    printf("[+] NO ttyACM0                OK\n");
+    printf("[+] NO Z-WAVE RF TX           OK\n");
+    printf("========================================\n");
+
+    return 0;
+}
+
+
 static int run_oem_transport_gate_selftest(void)
 {
     static const uint8_t wake_event[] = {
@@ -7649,6 +7858,406 @@ static int run_shadow_wakeup_hardware_observer(
 }
 
 
+
+/*
+ * ============================================================
+ * V7.12 STAGE 11C.1
+ * STRICT FIRST REAL-TX TRANSACTION — OFFLINE MODEL
+ * ============================================================
+ *
+ * Integra:
+ *
+ *   Wake-Up Notification 84 07
+ *       -> shadow candidate 4 / 84 08
+ *       -> generic transport gate
+ *       -> strict Stage11B gate
+ *       -> exact zw_send_data_transaction()
+ *       -> transaction finish
+ *
+ * IMPORTANTE:
+ *
+ *   FD = socketpair(AF_UNIX)
+ *   NO setup_serial()
+ *   NO ttyACM0
+ *   NO Z-Wave RF
+ */
+
+static int run_oem_first_real_tx_transaction_case(
+    uint8_t tx_status,
+    int expect_commit)
+{
+    static const uint8_t wake_event[] = {
+        0x84, 0x07
+    };
+
+    static const uint8_t allowed_command[] = {
+        0x84, 0x08
+    };
+
+    struct oem_cmdq_entry original_cmdq;
+    int sv[2];
+    pid_t pid;
+    int status;
+    int tx_rc;
+    int finish_rc;
+    enum oem_cmdq_tx_result tx_result;
+
+    oem_shadow_cmdq_reset();
+    oem_transport_gate_disarm();
+
+    if (oem_shadow_cmdq_arm(
+            4,
+            allowed_command,
+            sizeof(allowed_command)) != 0) {
+        printf("[-] arm shadow CMDQ fallo\n");
+        return 1;
+    }
+
+    if (oem_shadow_cmdq_consider_wakeup(
+            4,
+            wake_event,
+            sizeof(wake_event)) != 1) {
+        printf("[-] wake candidate fallo\n");
+        oem_shadow_cmdq_reset();
+        return 1;
+    }
+
+    original_cmdq = oem_shadow_cmdq_entry;
+
+    /*
+     * Primera barrera:
+     * aun DISARMED debe estar bloqueado.
+     */
+    if (oem_first_real_tx_candidate_allowed() != 0) {
+        printf("[-] strict gate permitio DISARMED\n");
+        oem_shadow_cmdq_reset();
+        return 1;
+    }
+
+    printf("[+] STRICT GATE DISARMED       : BLOCKED [OK]\n");
+
+    oem_transport_gate_arm();
+
+    if (oem_first_real_tx_candidate_allowed() != 1) {
+        printf("[-] strict gate rechazo Node4 / 84 08\n");
+        oem_transport_gate_disarm();
+        oem_shadow_cmdq_reset();
+        return 1;
+    }
+
+    printf("[+] STRICT GATE ARMED          : ALLOWED [OK]\n");
+
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) {
+        perror("socketpair");
+        oem_transport_gate_disarm();
+        oem_shadow_cmdq_reset();
+        return 1;
+    }
+
+    pid = fork();
+
+    if (pid < 0) {
+        perror("fork");
+        close(sv[0]);
+        close(sv[1]);
+        oem_transport_gate_disarm();
+        oem_shadow_cmdq_reset();
+        return 1;
+    }
+
+    if (pid == 0) {
+        uint8_t frame[64];
+        size_t got = 0;
+        size_t total = 0;
+        uint8_t ack = 0x06;
+        uint8_t response[6];
+        uint8_t callback[7];
+        uint8_t rx_ack;
+        uint8_t expected_checksum;
+        ssize_t n;
+
+        close(sv[1]);
+
+        /*
+         * Leer cabecera SOF + LEN.
+         */
+        while (got < 2) {
+            n = read(sv[0],
+                     frame + got,
+                     2 - got);
+
+            if (n <= 0)
+                _exit(20);
+
+            got += (size_t)n;
+        }
+
+        if (frame[0] != 0x01)
+            _exit(21);
+
+        total = (size_t)frame[1] + 2U;
+
+        if (total != 11U ||
+            total > sizeof(frame))
+            _exit(22);
+
+        while (got < total) {
+            n = read(sv[0],
+                     frame + got,
+                     total - got);
+
+            if (n <= 0)
+                _exit(23);
+
+            got += (size_t)n;
+        }
+
+        /*
+         * Validación EXACTA del primer TX permitido:
+         *
+         * 01 09 00 13 04 02 84 08 25 01 CS
+         */
+        if (frame[2] != 0x00 ||
+            frame[3] != 0x13 ||
+            frame[4] != 0x04 ||
+            frame[5] != 0x02 ||
+            frame[6] != 0x84 ||
+            frame[7] != 0x08 ||
+            frame[8] != 0x25 ||
+            frame[9] != 0x01)
+            _exit(24);
+
+        expected_checksum = 0xFF;
+
+        for (size_t i = 1; i < total - 1; ++i)
+            expected_checksum ^= frame[i];
+
+        if (frame[total - 1] != expected_checksum)
+            _exit(25);
+
+        /*
+         * Serial API ACK.
+         */
+        if (write(sv[0], &ack, 1) != 1)
+            _exit(26);
+
+        /*
+         * RESPONSE ZW_SEND_DATA:
+         * accepted = 1
+         */
+        response[0] = 0x01;
+        response[1] = 0x04;
+        response[2] = 0x01;
+        response[3] = 0x13;
+        response[4] = 0x01;
+        response[5] = 0xFF ^
+                      response[1] ^
+                      response[2] ^
+                      response[3] ^
+                      response[4];
+
+        if (write(sv[0],
+                  response,
+                  sizeof(response)) !=
+            (ssize_t)sizeof(response))
+            _exit(27);
+
+        /*
+         * Esperar ACK del host a RESPONSE.
+         */
+        if (read(sv[0], &rx_ack, 1) != 1 ||
+            rx_ack != 0x06)
+            _exit(28);
+
+        /*
+         * CALLBACK:
+         * callback id = 1
+         * tx_status = argumento del caso.
+         */
+        callback[0] = 0x01;
+        callback[1] = 0x05;
+        callback[2] = 0x00;
+        callback[3] = 0x13;
+        callback[4] = 0x01;
+        callback[5] = tx_status;
+        callback[6] = 0xFF ^
+                      callback[1] ^
+                      callback[2] ^
+                      callback[3] ^
+                      callback[4] ^
+                      callback[5];
+
+        if (write(sv[0],
+                  callback,
+                  sizeof(callback)) !=
+            (ssize_t)sizeof(callback))
+            _exit(29);
+
+        /*
+         * Esperar ACK del host al CALLBACK.
+         */
+        if (read(sv[0], &rx_ack, 1) != 1 ||
+            rx_ack != 0x06)
+            _exit(30);
+
+        close(sv[0]);
+        _exit(0);
+    }
+
+    close(sv[0]);
+
+    /*
+     * Exactamente la misma función de transporte que
+     * utilizaremos posteriormente con el FD físico.
+     */
+    tx_rc = zw_send_data_transaction(
+        sv[1],
+        4,
+        allowed_command,
+        sizeof(allowed_command),
+        0x25,
+        0x01);
+
+    close(sv[1]);
+
+    if (waitpid(pid, &status, 0) < 0) {
+        perror("waitpid");
+        oem_transport_gate_disarm();
+        oem_shadow_cmdq_reset();
+        return 1;
+    }
+
+    if (!WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        printf("[-] peer Serial API fallo: %d\n",
+               WIFEXITED(status) ?
+               WEXITSTATUS(status) : -1);
+
+        oem_transport_gate_disarm();
+        oem_shadow_cmdq_reset();
+        return 1;
+    }
+
+    tx_result =
+        tx_rc == 0 ?
+        OEM_CMDQ_TX_COMPLETE_OK :
+        OEM_CMDQ_TX_FAILED;
+
+    finish_rc =
+        oem_shadow_candidate_finish(tx_result);
+
+    if (expect_commit) {
+        if (tx_rc != 0) {
+            printf("[-] esperaba TX SUCCESS\n");
+            oem_transport_gate_disarm();
+            oem_shadow_cmdq_reset();
+            return 1;
+        }
+
+        if (finish_rc != 0) {
+            printf("[-] finish success fallo\n");
+            oem_transport_gate_disarm();
+            oem_shadow_cmdq_reset();
+            return 1;
+        }
+
+        if (oem_shadow_candidate_valid != 0 ||
+            oem_shadow_cmdq_entry.len != 0) {
+            printf("[-] success no hizo COMMIT\n");
+            oem_transport_gate_disarm();
+            oem_shadow_cmdq_reset();
+            return 1;
+        }
+
+        printf("[+] TX COMPLETE OK             : COMMIT [OK]\n");
+    } else {
+        if (tx_rc == 0) {
+            printf("[-] esperaba TX FAILURE\n");
+            oem_transport_gate_disarm();
+            oem_shadow_cmdq_reset();
+            return 1;
+        }
+
+        if (finish_rc != 0) {
+            printf("[-] finish failure inesperado\n");
+            oem_transport_gate_disarm();
+            oem_shadow_cmdq_reset();
+            return 1;
+        }
+
+        if (!oem_shadow_candidate_valid ||
+            memcmp(&oem_shadow_cmdq_entry,
+                   &original_cmdq,
+                   sizeof(original_cmdq)) != 0) {
+            printf("[-] failure no preservo CMDQ/candidate\n");
+            oem_transport_gate_disarm();
+            oem_shadow_cmdq_reset();
+            return 1;
+        }
+
+        printf("[+] TX FAILURE                 : PRESERVE [OK]\n");
+    }
+
+    oem_transport_gate_disarm();
+    oem_shadow_cmdq_reset();
+
+    return 0;
+}
+
+
+static int run_oem_first_real_tx_transaction_selftest(void)
+{
+    int rc;
+
+    printf("========================================\n");
+    printf(" V7.12 STRICT FIRST REAL-TX E2E TEST\n");
+    printf("========================================\n");
+    printf("[+] OFFLINE ONLY\n");
+    printf("[+] FD                       : socketpair(AF_UNIX)\n");
+    printf("[+] Wake                     : Node4 / 84 07\n");
+    printf("[+] Candidate                : Node4 / 84 08\n");
+    printf("[+] Strict gate              : REQUIRED\n");
+    printf("[+] TX options               : 0x25\n");
+    printf("[+] Callback ID              : 0x01\n");
+    printf("[+] NO setup_serial()\n");
+    printf("[+] NO ttyACM0\n");
+    printf("[+] PHYSICAL Z-WAVE TX       : NONE\n");
+
+    printf("\n===== CASE 1 — CALLBACK SUCCESS =====\n");
+
+    rc = run_oem_first_real_tx_transaction_case(
+        0x00,
+        1);
+
+    if (rc != 0)
+        return 1;
+
+    printf("\n===== CASE 2 — CALLBACK FAILURE =====\n");
+
+    rc = run_oem_first_real_tx_transaction_case(
+        0x01,
+        0);
+
+    if (rc != 0)
+        return 1;
+
+    printf("\n===== STAGE 11C.1 RESULT =====\n");
+    printf("[+] WAKE 4 / 84 07            OK\n");
+    printf("[+] CANDIDATE 4 / 84 08       OK\n");
+    printf("[+] STRICT DISARMED -> BLOCK  OK\n");
+    printf("[+] STRICT ARMED -> ALLOW     OK\n");
+    printf("[+] EXACT TRANSPORT FRAME     OK\n");
+    printf("[+] TX OPTIONS 0x25           OK\n");
+    printf("[+] CALLBACK ID 0x01          OK\n");
+    printf("[+] SUCCESS -> COMMIT         OK\n");
+    printf("[+] FAILURE -> PRESERVE       OK\n");
+    printf("[+] PHYSICAL Z-WAVE TX        NONE\n");
+    printf("========================================\n");
+
+    return 0;
+}
+
+
 static int run_oem_gated_transport_case(
         uint8_t tx_status,
         int expect_commit)
@@ -8478,6 +9087,255 @@ static int run_oem_wakeup_e2e_selftest(void)
 
 
 
+
+/*
+ * ============================================================
+ * V7.12 STAGE 11D
+ * ONE-SHOT HARDWARE WAKE-UP NO MORE INFORMATION
+ * ============================================================
+ *
+ * UNICO TX RF PERMITIDO POR ESTE MODO:
+ *
+ *   Trigger real RX : Node 4 / 84 07
+ *   TX              : Node 4 / 84 08
+ *   TX options      : 0x25
+ *   Callback ID     : 0x01
+ *
+ * Semantica:
+ *
+ *   - gate DISARMED mientras espera RX.
+ *   - solo un 84 07 real de Node4 crea el candidato.
+ *   - valida candidato exacto.
+ *   - arma gate en el ultimo instante.
+ *   - ejecuta UNA sola transaccion.
+ *   - desarma inmediatamente al retornar transporte.
+ *   - success -> COMMIT.
+ *   - failure -> PRESERVE.
+ *   - nunca reintenta.
+ */
+
+static int oem_first_real_tx_parameters_allowed(
+    uint8_t node_id,
+    const uint8_t *command,
+    size_t command_len,
+    uint8_t tx_options,
+    uint8_t callback_id)
+{
+    if (!oem_first_real_tx_candidate_allowed())
+        return 0;
+
+    if (!command)
+        return 0;
+
+    if (node_id != 4)
+        return 0;
+
+    if (command_len != 2)
+        return 0;
+
+    if (command[0] != 0x84 ||
+        command[1] != 0x08)
+        return 0;
+
+    if (tx_options != 0x25)
+        return 0;
+
+    if (callback_id != 0x01)
+        return 0;
+
+    if (oem_shadow_candidate.node_id != node_id)
+        return 0;
+
+    if (oem_shadow_candidate.command_len != command_len)
+        return 0;
+
+    if (memcmp(oem_shadow_candidate.command,
+               command,
+               command_len) != 0)
+        return 0;
+
+    return 1;
+}
+
+static int run_real_wakeup_no_more_info_once(int fd)
+{
+    static const uint8_t queued_command[] = {
+        0x84, 0x08
+    };
+
+    uint8_t frame[MAX_FRAME];
+    size_t frame_len;
+    int tx_rc;
+    int finish_rc;
+    enum oem_cmdq_tx_result tx_result;
+
+    printf("========================================\n");
+    printf(" V7.12 REAL WAKE-UP NO-MORE-INFO ONESHOT\n");
+    printf("========================================\n");
+    printf("[!] PHYSICAL Z-WAVE RF MODE\n");
+    printf("[+] Expected wake           : Node4 / 84 07\n");
+    printf("[+] Permitted TX            : Node4 / 84 08\n");
+    printf("[+] TX options              : 0x25\n");
+    printf("[+] Callback ID             : 0x01\n");
+    printf("[+] Automatic retries       : NONE\n");
+    printf("[+] Initial transport gate  : DISARMED\n");
+    printf("\n");
+
+    oem_shadow_cmdq_reset();
+    oem_transport_gate_disarm();
+
+    if (oem_shadow_cmdq_arm(
+            4,
+            queued_command,
+            sizeof(queued_command)) != 0) {
+        printf("[-] No se pudo preparar shadow CMDQ\n");
+        oem_transport_gate_disarm();
+        oem_shadow_cmdq_reset();
+        return 1;
+    }
+
+    printf("[+] Shadow CMDQ prepared    : 4 / 84 08\n");
+    printf("[+] Waiting REAL wake       : 4 / 84 07\n");
+    printf("[+] Gate while waiting      : DISARMED\n");
+
+    for (;;) {
+        frame_len = sizeof(frame);
+
+        if (receive_frame(
+                fd,
+                frame,
+                sizeof(frame),
+                &frame_len,
+                0) != 0) {
+            /*
+             * Sleeping-node observer semantics:
+             * receive_frame() has a finite SOF timeout.
+             * Silence is normal while Node4 sleeps.
+             *
+             * IMPORTANT:
+             * gate remains DISARMED and CMDQ preserved.
+             */
+            oem_transport_gate_disarm();
+            continue;
+        }
+
+        /*
+         * Solo APPLICATION_COMMAND_HANDLER.
+         *
+         * El decoder real valida longitudes y ejecuta el
+         * bridge shadow ya probado en Stage10F.
+         */
+        if (frame_len < 4 ||
+            frame[2] != 0x00 ||
+            frame[3] != 0x04) {
+            continue;
+        }
+
+        decode_application_command_handler(
+            frame,
+            frame_len);
+
+        /*
+         * Cualquier trama que no produzca candidato exacto
+         * se ignora con gate todavía DISARMED.
+         */
+        if (!oem_shadow_candidate_valid)
+            continue;
+
+        if (oem_shadow_candidate.node_id != 4 ||
+            oem_shadow_candidate.command_len != 2 ||
+            oem_shadow_candidate.command[0] != 0x84 ||
+            oem_shadow_candidate.command[1] != 0x08) {
+            printf("[-] Candidate inesperado: BLOCKED\n");
+            oem_transport_gate_disarm();
+            oem_shadow_cmdq_reset();
+            return 1;
+        }
+
+        printf("\n");
+        printf("[+] REAL WAKE DETECTED       : Node4 / 84 07\n");
+        printf("[+] Candidate exact          : Node4 / 84 08\n");
+
+        /*
+         * Último instante antes del transporte.
+         */
+        oem_transport_gate_arm();
+
+        if (!oem_first_real_tx_parameters_allowed(
+                4,
+                queued_command,
+                sizeof(queued_command),
+                0x25,
+                0x01)) {
+            printf("[-] STRICT PARAM BINDING     : BLOCKED\n");
+            oem_transport_gate_disarm();
+            oem_shadow_cmdq_reset();
+            return 1;
+        }
+
+        printf("[+] STRICT PARAM BINDING     : ALLOWED\n");
+        printf("[!] EXECUTING ONE RF TX      : 4 / 84 08\n");
+
+        /*
+         * UNICA llamada física del modo.
+         */
+        tx_rc = zw_send_data_transaction(
+            fd,
+            4,
+            queued_command,
+            sizeof(queued_command),
+            0x25,
+            0x01);
+
+        /*
+         * Gate cerrado inmediatamente después del intento,
+         * antes de COMMIT/PRESERVE.
+         */
+        oem_transport_gate_disarm();
+
+        tx_result =
+            tx_rc == 0 ?
+            OEM_CMDQ_TX_COMPLETE_OK :
+            OEM_CMDQ_TX_FAILED;
+
+        finish_rc =
+            oem_shadow_candidate_finish(tx_result);
+
+        if (tx_rc == 0 && finish_rc == 0) {
+            printf("\n");
+            printf("========================================\n");
+            printf(" REAL WAKE-UP TX RESULT\n");
+            printf("========================================\n");
+            printf("[+] TRANSMIT_COMPLETE_OK\n");
+            printf("[+] CMDQ                   : COMMIT\n");
+            printf("[+] Transport gate         : DISARMED\n");
+            printf("[+] Retry                  : NONE\n");
+            printf("[+] Result                 : SUCCESS\n");
+            printf("========================================\n");
+
+            oem_shadow_cmdq_reset();
+            return 0;
+        }
+
+        printf("\n");
+        printf("========================================\n");
+        printf(" REAL WAKE-UP TX RESULT\n");
+        printf("========================================\n");
+        printf("[-] TRANSPORT              : FAILURE\n");
+        printf("[+] CMDQ                   : PRESERVED\n");
+        printf("[+] Transport gate         : DISARMED\n");
+        printf("[+] Retry                  : NONE\n");
+        printf("[-] Result                 : FAILURE\n");
+        printf("========================================\n");
+
+        /*
+         * No segundo intento.
+         */
+        return 1;
+    }
+}
+
+
 static void usage(const char *prog)
 {
     fprintf(stderr,
@@ -8492,7 +9350,7 @@ static void usage(const char *prog)
         "--add-node-loop-selftest|"
         "--add-node-transaction-selftest|"
         "--add-node-failure-selftest|--add-node-real|"
-        "--listen|--listen-shadow-wakeup NODE|--oem-cmdq-selftest|--oem-wakeup-selftest|--oem-wakeup-pipeline-selftest|--oem-cmdq-transaction-selftest|--oem-wakeup-e2e-selftest|--oem-rx-shadow-selftest|--oem-shadow-cmdq-selftest|--oem-shadow-transaction-selftest|--oem-full-rx-shadow-selftest|--oem-transport-gate-selftest|--oem-gated-transport-selftest|--send-data-selftest|"
+        "--listen|--listen-shadow-wakeup NODE|--real-wakeup-no-more-info NODE ARM-84-08|--oem-cmdq-selftest|--oem-wakeup-selftest|--oem-wakeup-pipeline-selftest|--oem-cmdq-transaction-selftest|--oem-wakeup-e2e-selftest|--oem-rx-shadow-selftest|--oem-shadow-cmdq-selftest|--oem-shadow-transaction-selftest|--oem-full-rx-shadow-selftest|--oem-transport-gate-selftest|--oem-gated-transport-selftest|--oem-first-real-tx-gate-selftest|--oem-first-real-tx-transaction-selftest|--send-data-selftest|"
         "--send-data-transaction-selftest|"
         "--send-data-callback-selftest|"
         "--send-data-wait-selftest|"
@@ -8571,6 +9429,32 @@ int main(int argc, char **argv)
 
             mode = 38;
         }
+        else if (!strcmp(argv[1], "--real-wakeup-no-more-info")) {
+            char *endp;
+
+            if (argc < 4) {
+                fprintf(stderr,
+                        "ERROR: requiere exactamente NODE y ARM-84-08\n");
+                return 1;
+            }
+
+            node_id = strtoul(argv[2], &endp, 0);
+
+            if (*endp != '\0' ||
+                node_id != 4) {
+                fprintf(stderr,
+                        "ERROR: este modo solo autoriza NODE 4\n");
+                return 1;
+            }
+
+            if (strcmp(argv[3], "ARM-84-08") != 0) {
+                fprintf(stderr,
+                        "ERROR: token de armado invalido\n");
+                return 1;
+            }
+
+            mode = 41;
+        }
         else if (!strcmp(argv[1], "--oem-cmdq-selftest"))
             mode = 27;
         else if (!strcmp(argv[1], "--oem-wakeup-selftest"))
@@ -8593,6 +9477,10 @@ int main(int argc, char **argv)
             mode = 36;
         else if (!strcmp(argv[1], "--oem-gated-transport-selftest"))
             mode = 37;
+        else if (!strcmp(argv[1], "--oem-first-real-tx-gate-selftest"))
+            mode = 39;
+        else if (!strcmp(argv[1], "--oem-first-real-tx-transaction-selftest"))
+            mode = 40;
         else if (!strcmp(argv[1], "--send-data-selftest"))
             mode = 20;
         else if (!strcmp(argv[1], "--send-data-transaction-selftest"))
@@ -8668,7 +9556,10 @@ int main(int argc, char **argv)
      *
      *   argv[2] = dispositivo opcional
      */
-    if (mode == 8 || mode == 26 || mode == 38) {
+    if (mode == 41) {
+        if (argc >= 5)
+            dev = argv[4];
+    } else if (mode == 8 || mode == 26 || mode == 38) {
         if (argc >= 4)
             dev = argv[3];
     } else {
@@ -8701,6 +9592,7 @@ int main(int argc, char **argv)
            mode == 18 ? "ADD_NODE_REAL" :
            mode == 19 ? "PASSIVE_SERIAL_API_LISTENER" :
            mode == 38 ? "REAL_RX_SHADOW_WAKEUP_OBSERVER" :
+           mode == 41 ? "REAL_WAKEUP_NO_MORE_INFO_ONESHOT" :
            mode == 20 ? "ZW_SEND_DATA_OFFLINE_SELFTEST" :
            mode == 21 ? "ZW_SEND_DATA_TRANSACTION_SELFTEST" :
            mode == 22 ? "ZW_SEND_DATA_CALLBACK_SELFTEST" :
@@ -8719,9 +9611,49 @@ int main(int argc, char **argv)
                         mode == 35 ? "OEM_FULL_RX_SHADOW_SELFTEST" :
                         mode == 36 ? "OEM_TRANSPORT_GATE_SELFTEST" :
                         mode == 37 ? "OEM_GATED_REAL_TRANSPORT_SELFTEST" :
+                        mode == 39 ? "OEM_FIRST_REAL_TX_GATE_SELFTEST" :
+                        mode == 40 ? "OEM_FIRST_REAL_TX_TRANSACTION_SELFTEST" :
                         "PREPARE_ONLY");
 
     printf("========================================\n");
+
+    /*
+     * V7.12 STAGE 11C.2
+     * STRICT FIRST REAL-TX TRANSACTION SELFTEST.
+     *
+     * OFFLINE.
+     * FD = socketpair(AF_UNIX).
+     * Deliberadamente antes del acceso al dispositivo serie.
+     * NO hardware.
+     */
+    if (mode == 40) {
+        rc = run_oem_first_real_tx_transaction_selftest();
+
+        printf("\n[+] resultado: %s\n",
+               rc == 0 ? "OK" : "ERROR");
+
+        return rc == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+
+
+    /*
+     * V7.12 STAGE 11B.2
+     * STRICT FIRST REAL-TX GATE SELFTEST.
+     *
+     * OFFLINE.
+     * Deliberadamente antes de setup_serial().
+     * NO ttyACM0.
+     * NO Z-Wave RF TX.
+     */
+    if (mode == 39) {
+        rc = run_oem_first_real_tx_gate_selftest();
+
+        printf("\n[+] resultado: %s\n",
+               rc == 0 ? "OK" : "ERROR");
+
+        return rc == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+
 
     /*
      * V7.12 OEM CMDQ MODEL SELFTEST.
@@ -9193,6 +10125,17 @@ int main(int argc, char **argv)
      * V7.0 listener pasivo.
      * El puerto ya esta abierto/configurado.
      */
+    if (mode == 41) {
+        rc = run_real_wakeup_no_more_info_once(fd);
+
+        printf("\n[+] resultado: %s\n",
+               rc == 0 ? "OK" : "ERROR");
+
+        close(fd);
+
+        return rc == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+
     if (mode == 19) {
         rc = run_passive_listener(fd);
 
