@@ -5283,6 +5283,18 @@ struct oem_cmdq_entry {
     uint8_t command[OEM_CMDQ_COMMAND_MAX];
 };
 
+/*
+ * Keep this validation boundary out-of-line.
+ *
+ * GCC 8.4 MIPS otherwise propagates the deliberately invalid
+ * 33-byte negative selftest through the inlined call and emits
+ * a false-positive -Warray-bounds at memcpy(), despite the
+ * command_len > OEM_CMDQ_COMMAND_MAX rejection immediately
+ * below.
+ *
+ * The runtime bounds check remains authoritative.
+ */
+__attribute__((noinline))
 static int oem_cmdq_entry_build(struct oem_cmdq_entry *entry,
                                 const uint8_t *command,
                                 size_t command_len)
@@ -7443,6 +7455,200 @@ static int run_oem_wakeup_pipeline_selftest(void)
  */
 
 
+
+/*
+ * ============================================================
+ * V7.12 STAGE 10B
+ * REAL RX -> SHADOW WAKE-UP HARDWARE OBSERVER
+ * ============================================================
+ *
+ * RX hardware real.
+ * Transport gate SIEMPRE DISARMED.
+ *
+ * NO zw_send_data_transaction().
+ * NO COMMIT.
+ * NO transport gate ARM.
+ */
+
+static int run_shadow_wakeup_hardware_observer(
+        int fd,
+        uint8_t expected_node)
+{
+    static const uint8_t pending_command[] = {
+        0x84, 0x08
+    };
+
+    uint8_t frame[MAX_FRAME];
+    size_t frame_len;
+    unsigned int frames = 0;
+    unsigned int app_commands = 0;
+    unsigned int candidates = 0;
+
+    struct oem_cmdq_entry original_cmdq;
+
+    if (expected_node == 0 || expected_node > 232) {
+        printf("[-] Observer NODE invalido\n");
+        return 1;
+    }
+
+    oem_shadow_cmdq_reset();
+    oem_transport_gate_disarm();
+
+    if (oem_shadow_cmdq_arm(
+            expected_node,
+            pending_command,
+            sizeof(pending_command)) != 0) {
+        printf("[-] No se pudo armar Shadow CMDQ\n");
+        return 1;
+    }
+
+    original_cmdq = oem_shadow_cmdq_entry;
+
+    printf("\n");
+    printf("========================================\n");
+    printf(" V7.12 REAL RX SHADOW HARDWARE OBSERVER\n");
+    printf("========================================\n");
+    printf("[+] REAL SERIAL API RX\n");
+    printf("[+] Expected Node           : %u\n",
+           expected_node);
+    printf("[+] Shadow CMDQ             : 84 08\n");
+    printf("[+] Transport gate          : DISARMED\n");
+    printf("[+] zw_send_data_transaction: BLOCKED\n");
+    printf("[+] CMDQ COMMIT             : BLOCKED\n");
+    printf("[+] REAL Z-WAVE TX          : NONE\n");
+    printf("[+] Ctrl-C para terminar\n");
+    printf("\n");
+    printf("[+] Provoca ahora WAKE/TAMPER en Node %u.\n",
+           expected_node);
+
+    for (;;) {
+        int r;
+        int gate_rc;
+
+        printf("\n");
+        printf("----- ESPERANDO EVENTO %u -----\n",
+               frames + 1);
+
+        r = receive_frame(
+            fd,
+            frame,
+            sizeof(frame),
+            &frame_len,
+            0);
+
+        if (r < 0)
+            continue;
+
+        frames++;
+
+        if (frame_len < 5) {
+            printf("[!] trama demasiado corta\n");
+            continue;
+        }
+
+        printf("[+] Serial API TYPE        : 0x%02X (%s)\n",
+               frame[2],
+               frame[2] == REQUEST ? "REQUEST" :
+               frame[2] == RESPONSE ? "RESPONSE" :
+                                      "UNKNOWN");
+
+        printf("[+] Serial API FUNC_ID     : 0x%02X\n",
+               frame[3]);
+
+        if (frame[2] == REQUEST &&
+            frame[3] == 0x04) {
+
+            app_commands++;
+
+            printf("\n");
+            printf(">>> SHADOW APPLICATION COMMAND #%u <<<\n",
+                   app_commands);
+
+            decode_application_command_handler(
+                frame,
+                frame_len);
+
+            if (oem_shadow_candidate_valid) {
+                size_t i;
+
+                candidates++;
+
+                printf("\n");
+                printf(">>> HARDWARE SHADOW CANDIDATE <<<\n");
+
+                printf("[+] Candidate Node         : %u\n",
+                       oem_shadow_candidate.node_id);
+
+                printf("[+] Candidate CMD          :");
+
+                for (i = 0;
+                     i < oem_shadow_candidate.command_len;
+                     ++i) {
+                    printf(" %02X",
+                           oem_shadow_candidate.command[i]);
+                }
+
+                printf("\n");
+
+                /*
+                 * Gate DEBE continuar DISARMED.
+                 */
+                gate_rc =
+                    oem_transport_gate_candidate_allowed();
+
+                printf("[+] Transport gate         : %s\n",
+                       gate_rc ?
+                       "ALLOWED [UNEXPECTED]" :
+                       "DISARMED / BLOCKED [OK]");
+
+                if (gate_rc != 0) {
+                    printf("[-] SAFETY VIOLATION: gate permitido\n");
+
+                    oem_transport_gate_disarm();
+                    oem_shadow_cmdq_reset();
+
+                    return 1;
+                }
+
+                /*
+                 * Nada debe haber consumido/modificado CMDQ.
+                 */
+                if (memcmp(
+                        &oem_shadow_cmdq_entry,
+                        &original_cmdq,
+                        sizeof(original_cmdq)) != 0) {
+
+                    printf("[-] SAFETY VIOLATION: CMDQ modificada\n");
+
+                    oem_transport_gate_disarm();
+                    oem_shadow_cmdq_reset();
+
+                    return 1;
+                }
+
+                printf("[+] CMDQ state             : PRESERVED [OK]\n");
+                printf("[+] COMMIT                 : BLOCKED [OK]\n");
+                printf("[+] REAL TX                : BLOCKED [OK]\n");
+            }
+
+        } else {
+            printf("[+] Evento Serial API no decodificado\n");
+        }
+
+        printf("[+] Frames recibidos       : %u\n",
+               frames);
+
+        printf("[+] Application commands   : %u\n",
+               app_commands);
+
+        printf("[+] Shadow candidates      : %u\n",
+               candidates);
+    }
+
+    return 0;
+}
+
+
 static int run_oem_gated_transport_case(
         uint8_t tx_status,
         int expect_commit)
@@ -8286,7 +8492,7 @@ static void usage(const char *prog)
         "--add-node-loop-selftest|"
         "--add-node-transaction-selftest|"
         "--add-node-failure-selftest|--add-node-real|"
-        "--listen|--oem-cmdq-selftest|--oem-wakeup-selftest|--oem-wakeup-pipeline-selftest|--oem-cmdq-transaction-selftest|--oem-wakeup-e2e-selftest|--oem-rx-shadow-selftest|--oem-shadow-cmdq-selftest|--oem-shadow-transaction-selftest|--oem-full-rx-shadow-selftest|--oem-transport-gate-selftest|--oem-gated-transport-selftest|--send-data-selftest|"
+        "--listen|--listen-shadow-wakeup NODE|--oem-cmdq-selftest|--oem-wakeup-selftest|--oem-wakeup-pipeline-selftest|--oem-cmdq-transaction-selftest|--oem-wakeup-e2e-selftest|--oem-rx-shadow-selftest|--oem-shadow-cmdq-selftest|--oem-shadow-transaction-selftest|--oem-full-rx-shadow-selftest|--oem-transport-gate-selftest|--oem-gated-transport-selftest|--send-data-selftest|"
         "--send-data-transaction-selftest|"
         "--send-data-callback-selftest|"
         "--send-data-wait-selftest|"
@@ -8343,6 +8549,28 @@ int main(int argc, char **argv)
             mode = 18;
         else if (!strcmp(argv[1], "--listen"))
             mode = 19;
+        else if (!strcmp(argv[1], "--listen-shadow-wakeup")) {
+            char *endp;
+
+            if (argc < 3) {
+                fprintf(stderr,
+                        "ERROR: --listen-shadow-wakeup necesita NODE (1..232)\n");
+                return 1;
+            }
+
+            node_id = strtoul(argv[2], &endp, 0);
+
+            if (*endp != '\0' ||
+                node_id < 1 ||
+                node_id > 232) {
+                fprintf(stderr,
+                        "ERROR: NODE invalido: %s\n",
+                        argv[2]);
+                return 1;
+            }
+
+            mode = 38;
+        }
         else if (!strcmp(argv[1], "--oem-cmdq-selftest"))
             mode = 27;
         else if (!strcmp(argv[1], "--oem-wakeup-selftest"))
@@ -8440,7 +8668,7 @@ int main(int argc, char **argv)
      *
      *   argv[2] = dispositivo opcional
      */
-    if (mode == 8 || mode == 26) {
+    if (mode == 8 || mode == 26 || mode == 38) {
         if (argc >= 4)
             dev = argv[3];
     } else {
@@ -8472,6 +8700,7 @@ int main(int argc, char **argv)
            mode == 17 ? "ADD_NODE_FAILURE_SELFTEST" :
            mode == 18 ? "ADD_NODE_REAL" :
            mode == 19 ? "PASSIVE_SERIAL_API_LISTENER" :
+           mode == 38 ? "REAL_RX_SHADOW_WAKEUP_OBSERVER" :
            mode == 20 ? "ZW_SEND_DATA_OFFLINE_SELFTEST" :
            mode == 21 ? "ZW_SEND_DATA_TRANSACTION_SELFTEST" :
            mode == 22 ? "ZW_SEND_DATA_CALLBACK_SELFTEST" :
@@ -8846,6 +9075,27 @@ int main(int argc, char **argv)
 
     if (fd < 0)
         return 1;
+
+    /*
+     * V7.12 STAGE 10B
+     *
+     * RX hardware real.
+     * Gate forzado DISARMED.
+     * Sin transporte.
+     */
+    if (mode == 38) {
+        rc = run_shadow_wakeup_hardware_observer(
+            fd,
+            (uint8_t)node_id);
+
+        close(fd);
+
+        printf("\n[+] resultado observer: %s\n",
+               rc == 0 ? "OK" : "ERROR");
+
+        return rc;
+    }
+
 
     /*
      * ========================================================
