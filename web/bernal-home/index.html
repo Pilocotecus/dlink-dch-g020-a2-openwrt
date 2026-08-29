@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#111827">
+
+<title>Bernal Home</title>
+
+<style>
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: -apple-system, BlinkMacSystemFont,
+                 "Segoe UI", sans-serif;
+    background: #0f172a;
+    color: #f8fafc;
+}
+
+header {
+    padding: 28px 20px 18px;
+    text-align: center;
+}
+
+header h1 {
+    margin: 0;
+    font-size: 30px;
+}
+
+header p {
+    margin: 7px 0 0;
+    color: #94a3b8;
+}
+
+main {
+    width: min(92%, 520px);
+    margin: auto;
+    padding-bottom: 40px;
+}
+
+.card {
+    background: #1e293b;
+    border-radius: 20px;
+    padding: 22px;
+    margin-bottom: 16px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.20);
+}
+
+.device-title {
+    color: #94a3b8;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.contact {
+    text-align: center;
+    margin: 24px 0;
+}
+
+.contact-icon {
+    font-size: 54px;
+}
+
+.contact-state {
+    font-size: 32px;
+    font-weight: 800;
+    margin-top: 8px;
+}
+
+.open {
+    color: #fb7185;
+}
+
+.closed {
+    color: #4ade80;
+}
+
+.unknown {
+    color: #facc15;
+}
+
+.grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+.info {
+    background: #0f172a;
+    padding: 15px;
+    border-radius: 14px;
+}
+
+.label {
+    color: #94a3b8;
+    font-size: 13px;
+}
+
+.value {
+    font-size: 18px;
+    font-weight: 700;
+    margin-top: 5px;
+}
+
+.last-seen {
+    text-align: center;
+    color: #94a3b8;
+    font-size: 13px;
+    margin-top: 20px;
+}
+
+.status {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    margin-right: 6px;
+}
+
+.status-online {
+    background: #4ade80;
+}
+
+.status-offline {
+    background: #fb7185;
+}
+
+#error {
+    display: none;
+    background: #7f1d1d;
+    padding: 12px;
+    border-radius: 12px;
+    margin-bottom: 15px;
+}
+</style>
+</head>
+
+<body>
+
+<header>
+    <h1>Bernal Home</h1>
+    <p>Control local Z-Wave</p>
+</header>
+
+<main>
+
+<div id="error">
+    No se puede leer el estado del controlador.
+</div>
+
+<div class="card">
+
+    <div class="device-title">
+        DCH-Z110 · Node 4
+    </div>
+
+    <div class="contact">
+
+        <div class="contact-icon">
+            🚪
+        </div>
+
+        <div id="contact"
+             class="contact-state unknown">
+            DESCONOCIDO
+        </div>
+
+    </div>
+
+    <div class="grid">
+
+        <div class="info">
+            <div class="label">Controlador</div>
+            <div id="online" class="value">
+                ...
+            </div>
+        </div>
+
+        <div class="info">
+            <div class="label">Batería</div>
+            <div id="battery" class="value">
+                ...
+            </div>
+        </div>
+
+        <div class="info">
+            <div class="label">Sensor 03</div>
+            <div id="sensor03" class="value">
+                ...
+            </div>
+        </div>
+
+        <div class="info">
+            <div class="label">Sensor 01</div>
+            <div id="sensor01" class="value">
+                ...
+            </div>
+        </div>
+
+    </div>
+
+    <div id="lastSeen" class="last-seen">
+        Esperando datos...
+    </div>
+
+</div>
+
+</main>
+
+<script>
+const contact = document.getElementById("contact");
+const online = document.getElementById("online");
+const battery = document.getElementById("battery");
+const sensor03 = document.getElementById("sensor03");
+const sensor01 = document.getElementById("sensor01");
+const lastSeen = document.getElementById("lastSeen");
+const errorBox = document.getElementById("error");
+
+function textValue(value) {
+    return value === null || value === undefined
+        ? "—"
+        : value;
+}
+
+async function updateState() {
+    try {
+        const response =
+            await fetch("state.json?t=" + Date.now(), {
+                cache: "no-store"
+            });
+
+        if (!response.ok)
+            throw new Error("HTTP " + response.status);
+
+        const state = await response.json();
+
+        errorBox.style.display = "none";
+
+        contact.className = "contact-state";
+
+        if (state.contact === "open") {
+            contact.textContent = "ABIERTA";
+            contact.classList.add("open");
+        }
+        else if (state.contact === "closed") {
+            contact.textContent = "CERRADA";
+            contact.classList.add("closed");
+        }
+        else {
+            contact.textContent = "DESCONOCIDO";
+            contact.classList.add("unknown");
+        }
+
+        if (state.online) {
+            online.innerHTML =
+                '<span class="status status-online"></span>En línea';
+        }
+        else {
+            online.innerHTML =
+                '<span class="status status-offline"></span>Sin datos';
+        }
+
+        if (!state.battery_known) {
+            battery.textContent = "—";
+        }
+        else if (state.battery_low) {
+            battery.textContent = "⚠ Baja";
+        }
+        else if (state.battery_percent !== null) {
+            battery.textContent =
+                state.battery_percent + "%";
+        }
+        else {
+            battery.textContent = "OK";
+        }
+
+        sensor03.textContent =
+            textValue(state.sensor03);
+
+        sensor01.textContent =
+            textValue(state.sensor01_raw);
+
+        if (state.last_seen &&
+            state.last_seen !== "never") {
+            lastSeen.textContent =
+                "Última comunicación: " +
+                state.last_seen;
+        }
+        else {
+            lastSeen.textContent =
+                "Esperando primera comunicación";
+        }
+    }
+    catch (error) {
+        errorBox.style.display = "block";
+        online.innerHTML =
+            '<span class="status status-offline"></span>Error';
+    }
+}
+
+updateState();
+setInterval(updateState, 1000);
+</script>
+
+</body>
+</html>
