@@ -22,7 +22,8 @@
 #define REQUEST  0x00
 #define MAX_FRAME 256
 
-#define DCH_Z110_NODE 4
+#define DCH_Z110_NODE3 3
+#define DCH_Z110_NODE4 4
 
 static volatile sig_atomic_t running = 1;
 
@@ -43,7 +44,19 @@ struct dch_z110_state {
     time_t last_seen;
 };
 
+static struct dch_z110_state node3;
 static struct dch_z110_state node4;
+
+static struct dch_z110_state *state_for_node(uint8_t node_id)
+{
+    if (node_id == DCH_Z110_NODE3)
+        return &node3;
+
+    if (node_id == DCH_Z110_NODE4)
+        return &node4;
+
+    return NULL;
+}
 
 static void handle_signal(int sig)
 {
@@ -321,28 +334,87 @@ static int ensure_state_directory(void)
     return -1;
 }
 
-static int write_state_json(void)
+static void write_node_json(FILE *fp,
+                            uint8_t node_id,
+                            const struct dch_z110_state *state,
+                            int trailing_comma)
 {
-    FILE *fp;
     char last_seen[32];
 
-    if (ensure_state_directory() < 0)
-        return -1;
-
-    if (node4.last_seen != 0) {
+    if (state->last_seen != 0) {
         struct tm tm_seen;
 
-        localtime_r(&node4.last_seen, &tm_seen);
-
+        localtime_r(&state->last_seen, &tm_seen);
         strftime(last_seen,
                  sizeof(last_seen),
                  "%Y-%m-%d %H:%M:%S",
                  &tm_seen);
     } else {
-        snprintf(last_seen,
-                 sizeof(last_seen),
-                 "never");
+        snprintf(last_seen, sizeof(last_seen), "never");
     }
+
+    fprintf(fp, "    \"%u\": {\n",
+            (unsigned int)node_id);
+    fprintf(fp, "      \"node\": %u,\n",
+            (unsigned int)node_id);
+    fprintf(fp, "      \"device\": \"DCH-Z110\",\n");
+    fprintf(fp, "      \"online\": %s,\n",
+            state->last_seen != 0 ? "true" : "false");
+
+    fprintf(fp, "      \"contact\": \"%s\",\n",
+            !state->contact_known ? "unknown" :
+            state->contact_open ? "open" : "closed");
+
+    fprintf(fp, "      \"battery_known\": %s,\n",
+            state->battery_known ? "true" : "false");
+
+    fprintf(fp, "      \"battery_low\": %s,\n",
+            state->battery_low ? "true" : "false");
+
+    if (state->battery_known &&
+        !state->battery_low &&
+        state->battery_percent >= 0)
+        fprintf(fp, "      \"battery_percent\": %d,\n",
+                state->battery_percent);
+    else
+        fprintf(fp, "      \"battery_percent\": null,\n");
+
+    if (state->sensor03_known) {
+        fprintf(fp, "      \"sensor03\": %d,\n",
+                state->sensor03_value);
+        fprintf(fp, "      \"luminance_percent\": %d,\n",
+                state->sensor03_value);
+    } else {
+        fprintf(fp, "      \"sensor03\": null,\n");
+        fprintf(fp, "      \"luminance_percent\": null,\n");
+    }
+
+    if (state->sensor01_known) {
+        fprintf(fp, "      \"sensor01_raw\": %d,\n",
+                state->sensor01_raw);
+        fprintf(fp, "      \"temperature_f\": %d,\n",
+                state->sensor01_raw);
+        fprintf(fp, "      \"temperature_c\": %.1f,\n",
+                (state->sensor01_raw - 32.0) * 5.0 / 9.0);
+    } else {
+        fprintf(fp, "      \"sensor01_raw\": null,\n");
+        fprintf(fp, "      \"temperature_f\": null,\n");
+        fprintf(fp, "      \"temperature_c\": null,\n");
+    }
+
+    fprintf(fp, "      \"last_seen\": \"%s\"\n",
+            last_seen);
+
+    fprintf(fp, "    }%s\n",
+            trailing_comma ? "," : "");
+}
+
+static int write_state_json(void)
+{
+    FILE *fp;
+
+    if (ensure_state_directory() < 0)
+        return -1;
 
     fp = fopen(BERNAL_STATE_TMP, "w");
 
@@ -352,70 +424,13 @@ static int write_state_json(void)
     }
 
     fprintf(fp, "{\n");
-    fprintf(fp, "  \"node\": 4,\n");
-    fprintf(fp, "  \"device\": \"DCH-Z110\",\n");
-    fprintf(fp, "  \"online\": %s,\n",
-            node4.last_seen != 0 ? "true" : "false");
+    fprintf(fp, "  \"controller\": \"DCH-G020\",\n");
+    fprintf(fp, "  \"nodes\": {\n");
 
-    if (node4.contact_known) {
-        fprintf(fp,
-                "  \"contact\": \"%s\",\n",
-                node4.contact_open ? "open" : "closed");
-    } else {
-        fprintf(fp,
-                "  \"contact\": \"unknown\",\n");
-    }
+    write_node_json(fp, DCH_Z110_NODE3, &node3, 1);
+    write_node_json(fp, DCH_Z110_NODE4, &node4, 0);
 
-    fprintf(fp,
-            "  \"battery_known\": %s,\n",
-            node4.battery_known ? "true" : "false");
-
-    fprintf(fp,
-            "  \"battery_low\": %s,\n",
-            node4.battery_low ? "true" : "false");
-
-    if (node4.battery_known &&
-        !node4.battery_low &&
-        node4.battery_percent >= 0) {
-        fprintf(fp,
-                "  \"battery_percent\": %d,\n",
-                node4.battery_percent);
-    } else {
-        fprintf(fp,
-                "  \"battery_percent\": null,\n");
-    }
-
-    if (node4.sensor03_known) {
-        fprintf(fp,
-                "  \"sensor03\": %d,\n"
-                "  \"luminance_percent\": %d,\n",
-                node4.sensor03_value,
-                node4.sensor03_value);
-    } else {
-        fprintf(fp,
-                "  \"sensor03\": null,\n"
-                "  \"luminance_percent\": null,\n");
-    }
-
-    if (node4.sensor01_known) {
-        fprintf(fp,
-                "  \"sensor01_raw\": %d,\n"
-                "  \"temperature_f\": %d,\n"
-                "  \"temperature_c\": %.1f,\n",
-                node4.sensor01_raw,
-                node4.sensor01_raw,
-                (node4.sensor01_raw - 32.0) * 5.0 / 9.0);
-    } else {
-        fprintf(fp,
-                "  \"sensor01_raw\": null,\n"
-                "  \"temperature_f\": null,\n"
-                "  \"temperature_c\": null,\n");
-    }
-
-    fprintf(fp,
-            "  \"last_seen\": \"%s\"\n",
-            last_seen);
-
+    fprintf(fp, "  }\n");
     fprintf(fp, "}\n");
 
     if (fclose(fp) != 0) {
@@ -434,20 +449,25 @@ static int write_state_json(void)
     return 0;
 }
 
-static void print_contact_state(void)
+static void print_contact_state(uint8_t node_id,
+                                struct dch_z110_state *state)
 {
     char ts[32];
 
     timestamp(ts, sizeof(ts));
 
-    printf("[%s] NODE4 CONTACT %s\n",
+    printf("[%s] NODE%u CONTACT %s\n",
            ts,
-           node4.contact_open ? "OPEN" : "CLOSED");
+           (unsigned int)node_id,
+           state->contact_open ? "OPEN" : "CLOSED");
 
     fflush(stdout);
 }
 
-static void decode_embedded(const uint8_t *cmd, size_t len)
+static void decode_embedded(uint8_t node_id,
+                            struct dch_z110_state *state,
+                            const uint8_t *cmd,
+                            size_t len)
 {
     if (!cmd || len < 2)
         return;
@@ -456,18 +476,18 @@ static void decode_embedded(const uint8_t *cmd, size_t len)
         cmd[1] == 0x03 &&
         len >= 3) {
 
-        node4.battery_known = 1;
+        state->battery_known = 1;
 
         if (cmd[2] == 0xFF) {
             /*
              * DCH-Z110 observed value. Do not interpret 0xFF as
              * low battery until its behaviour is validated.
              */
-            node4.battery_low = 0;
-            node4.battery_percent = -1;
+            state->battery_low = 0;
+            state->battery_percent = -1;
         } else if (cmd[2] <= 100) {
-            node4.battery_low = 0;
-            node4.battery_percent = cmd[2];
+            state->battery_low = 0;
+            state->battery_percent = cmd[2];
         }
 
         return;
@@ -485,13 +505,13 @@ static void decode_embedded(const uint8_t *cmd, size_t len)
         cmd[6] == 0x06) {
 
         if (cmd[7] == 0x16) {
-            node4.contact_known = 1;
-            node4.contact_open = 1;
-            print_contact_state();
+            state->contact_known = 1;
+            state->contact_open = 1;
+            print_contact_state(node_id, state);
         } else if (cmd[7] == 0x17) {
-            node4.contact_known = 1;
-            node4.contact_open = 0;
-            print_contact_state();
+            state->contact_known = 1;
+            state->contact_open = 0;
+            print_contact_state(node_id, state);
         }
 
         return;
@@ -503,22 +523,25 @@ static void decode_embedded(const uint8_t *cmd, size_t len)
 
         if (cmd[2] == 0x03 &&
             cmd[3] == 0x01) {
-            node4.sensor03_known = 1;
-            node4.sensor03_value = cmd[4];
+            state->sensor03_known = 1;
+            state->sensor03_value = cmd[4];
         }
 
         if (cmd[2] == 0x01 &&
             cmd[3] == 0x0A &&
             len >= 6) {
-            node4.sensor01_known = 1;
-            node4.sensor01_raw =
+            state->sensor01_known = 1;
+            state->sensor01_raw =
                 ((int)cmd[4] << 8) |
                 (int)cmd[5];
         }
     }
 }
 
-static void decode_multi_cmd(const uint8_t *cmd, size_t len)
+static void decode_multi_cmd(uint8_t node_id,
+                             struct dch_z110_state *state,
+                             const uint8_t *cmd,
+                             size_t len)
 {
     uint8_t count;
     size_t pos;
@@ -545,7 +568,8 @@ static void decode_multi_cmd(const uint8_t *cmd, size_t len)
             (size_t)embedded_len > len - pos)
             return;
 
-        decode_embedded(&cmd[pos], embedded_len);
+        decode_embedded(node_id, state,
+                        &cmd[pos], embedded_len);
 
         pos += embedded_len;
     }
@@ -559,6 +583,7 @@ static void decode_application_command(const uint8_t *frame,
     uint8_t source_node;
     uint8_t command_len;
     const uint8_t *command;
+    struct dch_z110_state *state;
 
     if (!frame || frame_len < 8)
         return;
@@ -581,72 +606,91 @@ static void decode_application_command(const uint8_t *frame,
         return;
 
     command = &d[3];
+    state = state_for_node(source_node);
 
-    if (source_node != DCH_Z110_NODE)
+    if (!state)
         return;
 
-    node4.last_seen = time(NULL);
+    state->last_seen = time(NULL);
 
     if (command_len >= 3 &&
         command[0] == 0x8F &&
         command[1] == 0x01) {
-        decode_multi_cmd(command, command_len);
 
-        /*
-         * Publish once after the complete Multi Command has
-         * updated all Node4 fields.
-         */
+        decode_multi_cmd(source_node,
+                         state,
+                         command,
+                         command_len);
+
         if (write_state_json() < 0)
             fprintf(stderr,
                     "[!] Could not publish Bernal Home state\n");
     }
 }
 
-static void print_summary(void)
+static void print_node_summary(uint8_t node_id,
+                               const struct dch_z110_state *state)
 {
     char ts[32];
 
-    printf("\n");
-    printf("========================================\n");
-    printf(" BERNAL HOME - NODE4 STATE\n");
-    printf("========================================\n");
+    printf(" NODE%u / DCH-Z110\n",
+           (unsigned int)node_id);
 
-    if (node4.contact_known)
-        printf(" Contact : %s\n",
-               node4.contact_open ? "OPEN" : "CLOSED");
+    if (state->contact_known)
+        printf(" Contact     : %s\n",
+               state->contact_open ? "OPEN" : "CLOSED");
     else
-        printf(" Contact : UNKNOWN\n");
+        printf(" Contact     : UNKNOWN\n");
 
-    if (node4.battery_known) {
-        if (node4.battery_low)
-            printf(" Battery : LOW WARNING\n");
+    if (state->battery_known) {
+        if (state->battery_low)
+            printf(" Battery     : LOW WARNING\n");
+        else if (state->battery_percent >= 0)
+            printf(" Battery     : %d%%\n",
+                   state->battery_percent);
         else
-            printf(" Battery : %d%%\n",
-                   node4.battery_percent);
+            printf(" Battery     : NOT CALIBRATED\n");
     } else {
-        printf(" Battery : UNKNOWN\n");
+        printf(" Battery     : UNKNOWN\n");
     }
 
-    if (node4.sensor03_known)
-        printf(" Sensor03: %d\n",
-               node4.sensor03_value);
+    if (state->sensor03_known)
+        printf(" Luminance   : %d%%\n",
+               state->sensor03_value);
+    else
+        printf(" Luminance   : UNKNOWN\n");
 
-    if (node4.sensor01_known)
-        printf(" Sensor01: raw=%d\n",
-               node4.sensor01_raw);
+    if (state->sensor01_known)
+        printf(" Temperature : %.1f C\n",
+               (state->sensor01_raw - 32.0) * 5.0 / 9.0);
+    else
+        printf(" Temperature : UNKNOWN\n");
 
-    if (node4.last_seen != 0) {
+    if (state->last_seen != 0) {
         struct tm tm_seen;
 
-        localtime_r(&node4.last_seen, &tm_seen);
+        localtime_r(&state->last_seen, &tm_seen);
+        strftime(ts, sizeof(ts),
+                 "%Y-%m-%d %H:%M:%S", &tm_seen);
 
-        strftime(ts,
-                 sizeof(ts),
-                 "%Y-%m-%d %H:%M:%S",
-                 &tm_seen);
-
-        printf(" Last seen: %s\n", ts);
+        printf(" Last seen   : %s\n", ts);
+    } else {
+        printf(" Last seen   : NEVER\n");
     }
+}
+
+static void print_summary(void)
+{
+    printf("\n");
+    printf("========================================\n");
+    printf(" BERNAL HOME - MULTI-NODE STATE\n");
+    printf("========================================\n");
+
+    print_node_summary(DCH_Z110_NODE3, &node3);
+
+    printf("----------------------------------------\n");
+
+    print_node_summary(DCH_Z110_NODE4, &node4);
 
     printf("========================================\n");
 }
@@ -661,6 +705,7 @@ int main(int argc, char **argv)
     if (argc == 2)
         device = argv[1];
 
+    memset(&node3, 0, sizeof(node3));
     memset(&node4, 0, sizeof(node4));
 
     /*
@@ -675,10 +720,10 @@ int main(int argc, char **argv)
     signal(SIGTERM, handle_signal);
 
     printf("========================================\n");
-    printf(" BERNAL Z-WAVE DAEMON v0.2\n");
+    printf(" BERNAL Z-WAVE DAEMON v0.4 MULTI-NODE\n");
     printf("========================================\n");
     printf(" Serial API : %s\n", device);
-    printf(" Node       : 4 / DCH-Z110\n");
+    printf(" Nodes      : 3 + 4 / DCH-Z110\n");
     printf(" Mode       : PASSIVE\n");
     printf(" RF TX      : NONE\n");
     printf("========================================\n");
@@ -689,7 +734,7 @@ int main(int argc, char **argv)
         return 1;
 
     printf("[+] Serial API ready\n");
-    printf("[+] Waiting for Node4 events...\n\n");
+    printf("[+] Waiting for Node3 + Node4 events...\n\n");
     fflush(stdout);
 
     while (running) {

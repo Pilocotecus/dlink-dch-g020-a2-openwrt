@@ -38,7 +38,7 @@ header p {
 }
 
 main {
-    width: min(92%, 520px);
+    width: min(92%, 560px);
     margin: auto;
     padding-bottom: 40px;
 }
@@ -154,58 +154,89 @@ main {
     No se puede leer el estado del controlador.
 </div>
 
-<div class="card">
+<div class="card" data-node="4">
 
     <div class="device-title">
-        DCH-Z110 · Node 4
+        Sensor 1 · DCH-Z110 · Node 4
     </div>
 
     <div class="contact">
-
-        <div class="contact-icon">
-            🚪
-        </div>
-
-        <div id="contact"
+        <div class="contact-icon">🚪</div>
+        <div id="contact-4"
              class="contact-state unknown">
             DESCONOCIDO
         </div>
-
     </div>
 
     <div class="grid">
 
         <div class="info">
             <div class="label">Controlador</div>
-            <div id="online" class="value">
-                ...
-            </div>
+            <div id="online-4" class="value">...</div>
         </div>
 
         <div class="info">
             <div class="label">Batería</div>
-            <div id="battery" class="value">
-                ...
-            </div>
+            <div id="battery-4" class="value">...</div>
         </div>
 
         <div class="info">
             <div class="label">Luminosidad</div>
-            <div id="sensor03" class="value">
-                ...
-            </div>
+            <div id="luminance-4" class="value">...</div>
         </div>
 
         <div class="info">
             <div class="label">Temperatura</div>
-            <div id="sensor01" class="value">
-                ...
-            </div>
+            <div id="temperature-4" class="value">...</div>
         </div>
 
     </div>
 
-    <div id="lastSeen" class="last-seen">
+    <div id="lastSeen-4" class="last-seen">
+        Esperando datos...
+    </div>
+
+</div>
+
+<div class="card" data-node="3">
+
+    <div class="device-title">
+        Sensor 2 · DCH-Z110 · Node 3
+    </div>
+
+    <div class="contact">
+        <div class="contact-icon">🚪</div>
+        <div id="contact-3"
+             class="contact-state unknown">
+            DESCONOCIDO
+        </div>
+    </div>
+
+    <div class="grid">
+
+        <div class="info">
+            <div class="label">Controlador</div>
+            <div id="online-3" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Batería</div>
+            <div id="battery-3" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Luminosidad</div>
+            <div id="luminance-3" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Temperatura</div>
+            <div id="temperature-3" class="value">...</div>
+        </div>
+
+    </div>
+
+    <div id="lastSeen-3" class="last-seen">
         Esperando datos...
     </div>
 
@@ -214,18 +245,105 @@ main {
 </main>
 
 <script>
-const contact = document.getElementById("contact");
-const online = document.getElementById("online");
-const battery = document.getElementById("battery");
-const sensor03 = document.getElementById("sensor03");
-const sensor01 = document.getElementById("sensor01");
-const lastSeen = document.getElementById("lastSeen");
 const errorBox = document.getElementById("error");
 
-function textValue(value) {
-    return value === null || value === undefined
-        ? "—"
-        : value;
+function updateNode(nodeId, state) {
+    const contact =
+        document.getElementById("contact-" + nodeId);
+
+    const online =
+        document.getElementById("online-" + nodeId);
+
+    const battery =
+        document.getElementById("battery-" + nodeId);
+
+    const luminance =
+        document.getElementById("luminance-" + nodeId);
+
+    const temperature =
+        document.getElementById("temperature-" + nodeId);
+
+    const lastSeen =
+        document.getElementById("lastSeen-" + nodeId);
+
+    contact.className = "contact-state";
+
+    if (!state) {
+        contact.textContent = "DESCONOCIDO";
+        contact.classList.add("unknown");
+
+        online.innerHTML =
+            '<span class="status status-offline"></span>Sin datos';
+
+        battery.textContent = "—";
+        luminance.textContent = "—";
+        temperature.textContent = "—";
+
+        lastSeen.textContent =
+            "Esperando primera comunicación";
+
+        return;
+    }
+
+    if (state.contact === "open") {
+        contact.textContent = "ABIERTA";
+        contact.classList.add("open");
+    }
+    else if (state.contact === "closed") {
+        contact.textContent = "CERRADA";
+        contact.classList.add("closed");
+    }
+    else {
+        contact.textContent = "DESCONOCIDO";
+        contact.classList.add("unknown");
+    }
+
+    if (state.online) {
+        online.innerHTML =
+            '<span class="status status-online"></span>En línea';
+    }
+    else {
+        online.innerHTML =
+            '<span class="status status-offline"></span>Sin datos';
+    }
+
+    if (!state.battery_known) {
+        battery.textContent = "—";
+    }
+    else if (state.battery_low) {
+        battery.textContent = "⚠ Baja";
+    }
+    else if (state.battery_percent !== null &&
+             state.battery_percent !== undefined) {
+        battery.textContent =
+            state.battery_percent + "%";
+    }
+    else {
+        battery.textContent = "No calibrada";
+    }
+
+    luminance.textContent =
+        state.luminance_percent === null ||
+        state.luminance_percent === undefined
+            ? "—"
+            : state.luminance_percent + " %";
+
+    temperature.textContent =
+        state.temperature_c === null ||
+        state.temperature_c === undefined
+            ? "—"
+            : Number(state.temperature_c).toFixed(1) + " °C";
+
+    if (state.last_seen &&
+        state.last_seen !== "never") {
+        lastSeen.textContent =
+            "Última comunicación: " +
+            state.last_seen;
+    }
+    else {
+        lastSeen.textContent =
+            "Esperando primera comunicación";
+    }
 }
 
 async function updateState() {
@@ -242,71 +360,15 @@ async function updateState() {
 
         errorBox.style.display = "none";
 
-        contact.className = "contact-state";
+        const nodes = state.nodes || {};
 
-        if (state.contact === "open") {
-            contact.textContent = "ABIERTA";
-            contact.classList.add("open");
-        }
-        else if (state.contact === "closed") {
-            contact.textContent = "CERRADA";
-            contact.classList.add("closed");
-        }
-        else {
-            contact.textContent = "DESCONOCIDO";
-            contact.classList.add("unknown");
-        }
-
-        if (state.online) {
-            online.innerHTML =
-                '<span class="status status-online"></span>En línea';
-        }
-        else {
-            online.innerHTML =
-                '<span class="status status-offline"></span>Sin datos';
-        }
-
-        if (!state.battery_known) {
-            battery.textContent = "—";
-        }
-        else if (state.battery_low) {
-            battery.textContent = "⚠ Baja";
-        }
-        else if (state.battery_percent !== null) {
-            battery.textContent =
-                state.battery_percent + "%";
-        }
-        else {
-            battery.textContent = "No calibrada";
-        }
-
-        sensor03.textContent =
-            state.luminance_percent === null ||
-            state.luminance_percent === undefined
-                ? "—"
-                : state.luminance_percent + " %";
-
-        sensor01.textContent =
-            state.temperature_c === null ||
-            state.temperature_c === undefined
-                ? "—"
-                : state.temperature_c.toFixed(1) + " °C";
-
-        if (state.last_seen &&
-            state.last_seen !== "never") {
-            lastSeen.textContent =
-                "Última comunicación: " +
-                state.last_seen;
-        }
-        else {
-            lastSeen.textContent =
-                "Esperando primera comunicación";
-        }
+        updateNode("4", nodes["4"]);
+        updateNode("3", nodes["3"]);
     }
     catch (error) {
         errorBox.style.display = "block";
-        online.innerHTML =
-            '<span class="status status-offline"></span>Error';
+        updateNode("4", null);
+        updateNode("3", null);
     }
 }
 
