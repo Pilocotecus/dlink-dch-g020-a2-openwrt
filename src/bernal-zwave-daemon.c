@@ -387,20 +387,29 @@ static int write_state_json(void)
 
     if (node4.sensor03_known) {
         fprintf(fp,
-                "  \"sensor03\": %d,\n",
+                "  \"sensor03\": %d,\n"
+                "  \"luminance_percent\": %d,\n",
+                node4.sensor03_value,
                 node4.sensor03_value);
     } else {
         fprintf(fp,
-                "  \"sensor03\": null,\n");
+                "  \"sensor03\": null,\n"
+                "  \"luminance_percent\": null,\n");
     }
 
     if (node4.sensor01_known) {
         fprintf(fp,
-                "  \"sensor01_raw\": %d,\n",
-                node4.sensor01_raw);
+                "  \"sensor01_raw\": %d,\n"
+                "  \"temperature_f\": %d,\n"
+                "  \"temperature_c\": %.1f,\n",
+                node4.sensor01_raw,
+                node4.sensor01_raw,
+                (node4.sensor01_raw - 32.0) * 5.0 / 9.0);
     } else {
         fprintf(fp,
-                "  \"sensor01_raw\": null,\n");
+                "  \"sensor01_raw\": null,\n"
+                "  \"temperature_f\": null,\n"
+                "  \"temperature_c\": null,\n");
     }
 
     fprintf(fp,
@@ -450,7 +459,11 @@ static void decode_embedded(const uint8_t *cmd, size_t len)
         node4.battery_known = 1;
 
         if (cmd[2] == 0xFF) {
-            node4.battery_low = 1;
+            /*
+             * DCH-Z110 observed value. Do not interpret 0xFF as
+             * low battery until its behaviour is validated.
+             */
+            node4.battery_low = 0;
             node4.battery_percent = -1;
         } else if (cmd[2] <= 100) {
             node4.battery_low = 0;

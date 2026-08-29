@@ -190,14 +190,14 @@ main {
         </div>
 
         <div class="info">
-            <div class="label">Sensor 03</div>
+            <div class="label">Luminosidad</div>
             <div id="sensor03" class="value">
                 ...
             </div>
         </div>
 
         <div class="info">
-            <div class="label">Sensor 01</div>
+            <div class="label">Temperatura</div>
             <div id="sensor01" class="value">
                 ...
             </div>
@@ -277,14 +277,20 @@ async function updateState() {
                 state.battery_percent + "%";
         }
         else {
-            battery.textContent = "OK";
+            battery.textContent = "No calibrada";
         }
 
         sensor03.textContent =
-            textValue(state.sensor03);
+            state.luminance_percent === null ||
+            state.luminance_percent === undefined
+                ? "—"
+                : state.luminance_percent + " %";
 
         sensor01.textContent =
-            textValue(state.sensor01_raw);
+            state.temperature_c === null ||
+            state.temperature_c === undefined
+                ? "—"
+                : state.temperature_c.toFixed(1) + " °C";
 
         if (state.last_seen &&
             state.last_seen !== "never") {
