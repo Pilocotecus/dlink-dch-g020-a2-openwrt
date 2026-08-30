@@ -177,6 +177,71 @@ main {
     color: #facc15;
 }
 
+
+    .history-card {
+        background: #1e293b;
+        border-radius: 20px;
+        padding: 20px;
+        margin-top: 16px;
+        box-shadow: 0 8px 24px rgba(0,0,0,.20);
+    }
+
+    .history-title {
+        font-size: 18px;
+        font-weight: 800;
+        margin-bottom: 14px;
+    }
+
+    .history-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .history-event {
+        display: grid;
+        grid-template-columns: 52px 1fr auto;
+        gap: 10px;
+        align-items: center;
+        padding: 11px 0;
+        border-bottom: 1px solid rgba(148,163,184,.15);
+    }
+
+    .history-event:last-child {
+        border-bottom: 0;
+    }
+
+    .history-time {
+        color: #94a3b8;
+        font-size: 13px;
+        font-variant-numeric: tabular-nums;
+    }
+
+    .history-name {
+        font-size: 14px;
+        font-weight: 600;
+    }
+
+    .history-state {
+        font-size: 12px;
+        font-weight: 800;
+    }
+
+    .history-open {
+        color: #fb7185;
+    }
+
+    .history-closed {
+        color: #4ade80;
+    }
+
+    .history-empty {
+        color: #94a3b8;
+        text-align: center;
+        padding: 14px 0;
+        font-size: 14px;
+    }
+
 </style>
 </head>
 
@@ -296,6 +361,17 @@ main {
     </div>
 
 </div>
+
+
+    <div class="history-card">
+        <div class="history-title">Actividad reciente</div>
+
+        <div id="history-list" class="history-list">
+            <div class="history-empty">
+                Cargando actividad...
+            </div>
+        </div>
+    </div>
 
 </main>
 
@@ -480,6 +556,94 @@ async function updateState() {
 
 updateState();
 setInterval(updateState, 1000);
+
+function renderHistory(events) {
+    const list = document.getElementById("history-list");
+
+    if (!list)
+        return;
+
+    if (!events.length) {
+        list.innerHTML =
+            '<div class="history-empty">Sin actividad registrada</div>';
+        return;
+    }
+
+    list.innerHTML = "";
+
+    events.slice(-12).reverse().forEach(event => {
+        const row = document.createElement("div");
+        row.className = "history-event";
+
+        const time = document.createElement("div");
+        time.className = "history-time";
+
+        const parts = String(event.time || "").split(" ");
+        time.textContent = parts.length > 1
+            ? parts[1].slice(0, 5)
+            : "--:--";
+
+        const name = document.createElement("div");
+        name.className = "history-name";
+        name.textContent = event.name || ("Node " + event.node);
+
+        const state = document.createElement("div");
+        state.className = "history-state";
+
+        if (event.state === "open") {
+            state.textContent = "ABIERTA";
+            state.classList.add("history-open");
+        } else {
+            state.textContent = "CERRADA";
+            state.classList.add("history-closed");
+        }
+
+        row.appendChild(time);
+        row.appendChild(name);
+        row.appendChild(state);
+
+        list.appendChild(row);
+    });
+}
+
+async function updateHistory() {
+    try {
+        const response = await fetch(
+            "history.jsonl?t=" + Date.now(),
+            { cache: "no-store" }
+        );
+
+        if (!response.ok)
+            throw new Error("history unavailable");
+
+        const text = await response.text();
+
+        const events = text
+            .split("\n")
+            .filter(line => line.trim())
+            .map(line => {
+                try {
+                    return JSON.parse(line);
+                } catch {
+                    return null;
+                }
+            })
+            .filter(Boolean);
+
+        renderHistory(events);
+
+    } catch (error) {
+        const list = document.getElementById("history-list");
+
+        if (list)
+            list.innerHTML =
+                '<div class="history-empty">Historial no disponible</div>';
+    }
+}
+
+updateHistory();
+setInterval(updateHistory, 3000);
+
 </script>
 
 

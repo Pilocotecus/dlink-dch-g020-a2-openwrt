@@ -321,6 +321,7 @@ static int receive_frame(int fd,
 #define BERNAL_STATE_DIR  "/tmp/bernal-home"
 #define BERNAL_STATE_FILE "/tmp/bernal-home/state.json"
 #define BERNAL_STATE_TMP  "/tmp/bernal-home/state.json.tmp"
+#define BERNAL_HISTORY_FILE "/tmp/bernal-home/history.jsonl"
 
 static int ensure_state_directory(void)
 {
@@ -449,6 +450,43 @@ static int write_state_json(void)
     return 0;
 }
 
+static void append_history_event(uint8_t node_id,
+                                 int contact_open)
+{
+    FILE *fp;
+    char ts[32];
+    const char *name;
+
+    if (ensure_state_directory() < 0)
+        return;
+
+    timestamp(ts, sizeof(ts));
+
+    if (node_id == DCH_Z110_NODE4)
+        name = "Puerta principal";
+    else if (node_id == DCH_Z110_NODE3)
+        name = "Puerta pérgola";
+    else
+        name = "Desconocida";
+
+    fp = fopen(BERNAL_HISTORY_FILE, "a");
+
+    if (!fp) {
+        perror("fopen history.jsonl");
+        return;
+    }
+
+    fprintf(fp,
+            "{\"time\":\"%s\",\"node\":%u,"
+            "\"name\":\"%s\",\"state\":\"%s\"}\n",
+            ts,
+            (unsigned int)node_id,
+            name,
+            contact_open ? "open" : "closed");
+
+    fclose(fp);
+}
+
 static void print_contact_state(uint8_t node_id,
                                 struct dch_z110_state *state)
 {
@@ -505,10 +543,18 @@ static void decode_embedded(uint8_t node_id,
         cmd[6] == 0x06) {
 
         if (cmd[7] == 0x16) {
+            if (!state->contact_known ||
+                !state->contact_open)
+                append_history_event(node_id, 1);
+
             state->contact_known = 1;
             state->contact_open = 1;
             print_contact_state(node_id, state);
         } else if (cmd[7] == 0x17) {
+            if (!state->contact_known ||
+                state->contact_open)
+                append_history_event(node_id, 0);
+
             state->contact_known = 1;
             state->contact_open = 0;
             print_contact_state(node_id, state);
