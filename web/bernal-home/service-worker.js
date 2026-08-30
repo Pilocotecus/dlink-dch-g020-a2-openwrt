@@ -1,4 +1,4 @@
-const CACHE = "bernal-home-v4";
+const CACHE = "bernal-home-v5";
 
 const STATIC_FILES = [
   "/bernal-home/",

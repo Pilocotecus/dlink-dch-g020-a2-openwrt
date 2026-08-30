@@ -478,6 +478,42 @@ function updateNode(nodeId, state) {
 }
 
 
+
+const OPEN_WARNING_SECONDS = 120;
+
+const doorTimers = {
+    "3": { state: null, openedAt: null },
+    "4": { state: null, openedAt: null }
+};
+
+function trackDoor(nodeId, node) {
+    const timer = doorTimers[nodeId];
+
+    if (!node || !timer)
+        return;
+
+    const current = node.contact;
+
+    if (current === "open" && timer.state !== "open")
+        timer.openedAt = Date.now();
+
+    if (current === "closed")
+        timer.openedAt = null;
+
+    timer.state = current;
+}
+
+function openMinutes(nodeId) {
+    const timer = doorTimers[nodeId];
+
+    if (!timer || !timer.openedAt)
+        return 0;
+
+    return Math.floor(
+        (Date.now() - timer.openedAt) / 60000
+    );
+}
+
 function updateDashboard(node4, node3) {
     const icon =
         document.getElementById("dashboard-icon");
