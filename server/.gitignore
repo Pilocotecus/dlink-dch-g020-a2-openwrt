@@ -1,0 +1,8 @@
+keys/
+subscriptions.json
+history.jsonl
+*.pem
+*.key
+*.crt
+__pycache__/
+*.pyc

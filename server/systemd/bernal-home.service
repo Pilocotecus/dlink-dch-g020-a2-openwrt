@@ -1,0 +1,14 @@
+[Unit]
+Description=Bernal Home Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/bernal-home-server
+ExecStart=/opt/bernal-home-server/venv/bin/python /opt/bernal-home-server/server.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
