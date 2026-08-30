@@ -139,6 +139,44 @@ main {
     border-radius: 12px;
     margin-bottom: 15px;
 }
+
+.dashboard {
+    background: #1e293b;
+    border-radius: 20px;
+    padding: 22px;
+    margin-bottom: 16px;
+    text-align: center;
+    box-shadow: 0 8px 24px rgba(0,0,0,.20);
+}
+
+.dashboard-icon {
+    font-size: 42px;
+    margin-bottom: 8px;
+}
+
+.dashboard-state {
+    font-size: 25px;
+    font-weight: 800;
+}
+
+.dashboard-detail {
+    margin-top: 7px;
+    color: #94a3b8;
+    font-size: 14px;
+}
+
+.dashboard-ok {
+    color: #4ade80;
+}
+
+.dashboard-alert {
+    color: #fb7185;
+}
+
+.dashboard-unknown {
+    color: #facc15;
+}
+
 </style>
 </head>
 
@@ -154,6 +192,22 @@ main {
 <div id="error">
     No se puede leer el estado del controlador.
 </div>
+
+
+<div class="dashboard">
+    <div id="dashboard-icon" class="dashboard-icon">🏠</div>
+
+    <div id="dashboard-state"
+         class="dashboard-state dashboard-unknown">
+        COMPROBANDO CASA...
+    </div>
+
+    <div id="dashboard-detail"
+         class="dashboard-detail">
+        Esperando estado de las puertas
+    </div>
+</div>
+
 
 <div class="card" data-node="4">
 
@@ -347,6 +401,55 @@ function updateNode(nodeId, state) {
     }
 }
 
+
+function updateDashboard(node4, node3) {
+    const icon =
+        document.getElementById("dashboard-icon");
+
+    const state =
+        document.getElementById("dashboard-state");
+
+    const detail =
+        document.getElementById("dashboard-detail");
+
+    state.className = "dashboard-state";
+
+    if (!node4 || !node3) {
+        icon.textContent = "🏠";
+        state.textContent = "ESTADO INCOMPLETO";
+        state.classList.add("dashboard-unknown");
+        detail.textContent =
+            "Esperando comunicación de las puertas";
+        return;
+    }
+
+    const openDoors = [];
+
+    if (node4.contact === "open")
+        openDoors.push("Puerta principal");
+
+    if (node3.contact === "open")
+        openDoors.push("Puerta pérgola");
+
+    if (openDoors.length === 0) {
+        icon.textContent = "🔒";
+        state.textContent = "TODO CERRADO";
+        state.classList.add("dashboard-ok");
+        detail.textContent =
+            "Puerta principal y puerta pérgola protegidas";
+        return;
+    }
+
+    icon.textContent = "⚠️";
+    state.textContent =
+        openDoors.length === 1
+            ? "PUERTA ABIERTA"
+            : "PUERTAS ABIERTAS";
+
+    state.classList.add("dashboard-alert");
+    detail.textContent = openDoors.join(" · ");
+}
+
 async function updateState() {
     try {
         const response =
@@ -365,11 +468,13 @@ async function updateState() {
 
         updateNode("4", nodes["4"]);
         updateNode("3", nodes["3"]);
+        updateDashboard(nodes["4"], nodes["3"]);
     }
     catch (error) {
         errorBox.style.display = "block";
         updateNode("4", null);
         updateNode("3", null);
+        updateDashboard(null, null);
     }
 }
 
