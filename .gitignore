@@ -9,3 +9,6 @@ tools/zwprobe-v*-ok-openwrt
 
 # Local Bernal Home certificates / private CA
 local-ca/
+
+# Local development archive
+local-archive/
