@@ -6,3 +6,6 @@ tools/zwprobe.c.before-*
 tools/zwprobe-v*-before-*.c
 tools/zwprobe-v*-ok.c
 tools/zwprobe-v*-ok-openwrt
+
+# Local Bernal Home certificates / private CA
+local-ca/
