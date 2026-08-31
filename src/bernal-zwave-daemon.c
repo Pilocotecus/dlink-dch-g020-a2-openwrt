@@ -22,8 +22,10 @@
 #define REQUEST  0x00
 #define MAX_FRAME 256
 
-#define DCH_Z110_NODE3 3
-#define DCH_Z110_NODE4 4
+#define DCH_Z110_FIRST_NODE 3
+#define DCH_Z110_LAST_NODE  11
+#define DCH_Z110_NODE_COUNT \
+    (DCH_Z110_LAST_NODE - DCH_Z110_FIRST_NODE + 1)
 
 static volatile sig_atomic_t running = 1;
 
@@ -44,18 +46,21 @@ struct dch_z110_state {
     time_t last_seen;
 };
 
-static struct dch_z110_state node3;
-static struct dch_z110_state node4;
+static struct dch_z110_state nodes[DCH_Z110_NODE_COUNT];
 
 static struct dch_z110_state *state_for_node(uint8_t node_id)
 {
-    if (node_id == DCH_Z110_NODE3)
-        return &node3;
+    if (node_id < DCH_Z110_FIRST_NODE ||
+        node_id > DCH_Z110_LAST_NODE)
+        return NULL;
 
-    if (node_id == DCH_Z110_NODE4)
-        return &node4;
+    return &nodes[node_id - DCH_Z110_FIRST_NODE];
+}
 
-    return NULL;
+static const struct dch_z110_state *const_state_for_node(
+    uint8_t node_id)
+{
+    return state_for_node(node_id);
 }
 
 static void handle_signal(int sig)
@@ -428,8 +433,22 @@ static int write_state_json(void)
     fprintf(fp, "  \"controller\": \"DCH-G020\",\n");
     fprintf(fp, "  \"nodes\": {\n");
 
-    write_node_json(fp, DCH_Z110_NODE3, &node3, 1);
-    write_node_json(fp, DCH_Z110_NODE4, &node4, 0);
+    {
+        uint8_t node_id;
+
+        for (node_id = DCH_Z110_FIRST_NODE;
+             node_id <= DCH_Z110_LAST_NODE;
+             node_id++) {
+            const struct dch_z110_state *state =
+                const_state_for_node(node_id);
+
+            write_node_json(
+                fp,
+                node_id,
+                state,
+                node_id != DCH_Z110_LAST_NODE);
+        }
+    }
 
     fprintf(fp, "  }\n");
     fprintf(fp, "}\n");
@@ -462,12 +481,12 @@ static void append_history_event(uint8_t node_id,
 
     timestamp(ts, sizeof(ts));
 
-    if (node_id == DCH_Z110_NODE4)
+    if (node_id == 4)
         name = "Puerta principal";
-    else if (node_id == DCH_Z110_NODE3)
+    else if (node_id == 3)
         name = "Puerta pérgola";
     else
-        name = "Desconocida";
+        name = "Sensor Z-Wave";
 
     fp = fopen(BERNAL_HISTORY_FILE, "a");
 
@@ -732,11 +751,22 @@ static void print_summary(void)
     printf(" BERNAL HOME - MULTI-NODE STATE\n");
     printf("========================================\n");
 
-    print_node_summary(DCH_Z110_NODE3, &node3);
+    {
+        uint8_t node_id;
 
-    printf("----------------------------------------\n");
+        for (node_id = DCH_Z110_FIRST_NODE;
+             node_id <= DCH_Z110_LAST_NODE;
+             node_id++) {
 
-    print_node_summary(DCH_Z110_NODE4, &node4);
+            const struct dch_z110_state *state =
+                const_state_for_node(node_id);
+
+            print_node_summary(node_id, state);
+
+            if (node_id != DCH_Z110_LAST_NODE)
+                printf("----------------------------------------\n");
+        }
+    }
 
     printf("========================================\n");
 }
@@ -751,8 +781,7 @@ int main(int argc, char **argv)
     if (argc == 2)
         device = argv[1];
 
-    memset(&node3, 0, sizeof(node3));
-    memset(&node4, 0, sizeof(node4));
+    memset(nodes, 0, sizeof(nodes));
 
     /*
      * Publish an initial UNKNOWN/OFFLINE state before the
@@ -769,7 +798,7 @@ int main(int argc, char **argv)
     printf(" BERNAL Z-WAVE DAEMON v0.4 MULTI-NODE\n");
     printf("========================================\n");
     printf(" Serial API : %s\n", device);
-    printf(" Nodes      : 3 + 4 / DCH-Z110\n");
+    printf(" Nodes      : 3..11 / DCH-Z110\n");
     printf(" Mode       : PASSIVE\n");
     printf(" RF TX      : NONE\n");
     printf("========================================\n");
@@ -780,7 +809,7 @@ int main(int argc, char **argv)
         return 1;
 
     printf("[+] Serial API ready\n");
-    printf("[+] Waiting for Node3 + Node4 events...\n\n");
+    printf("[+] Waiting for DCH-Z110 Node3..Node11 events...\n\n");
     fflush(stdout);
 
     while (running) {

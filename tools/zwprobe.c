@@ -6275,7 +6275,7 @@ static int dch_z110_real_parameters_allowed(
     if (!oem_transport_gate_is_armed())
         return 0;
 
-    if (node_id != 3 && node_id != 4)
+    if (node_id < 3 || node_id > 11)
         return 0;
 
     if (command == NULL || command_len == 0)
@@ -10423,30 +10423,23 @@ static int dch_z110_real_tx_one(int fd,
 
 static int run_dch_z110_real_association_once(int fd, uint8_t target_node)
 {
-    static const uint8_t association_get[] = {
-        0x85, 0x02, 0x01
-    };
-
-    static const uint8_t association_set[] = {
-        0x85, 0x01, 0x01, 0x01
-    };
-
     static const uint8_t wake_no_more[] = {
         0x84, 0x08
     };
 
     uint8_t frame[MAX_FRAME];
     size_t frame_len;
+    struct dch_z110_plan plan;
+    size_t i;
 
     printf("============================================================\n");
-    printf(" STAGE 14E DCH-Z110 REAL ASSOCIATION\n");
+    printf(" STAGE 14E DCH-Z110 REAL FULL PROVISIONING\n");
     printf("============================================================\n");
     printf("[!] PHYSICAL Z-WAVE RF MODE\n");
     printf("[+] TARGET NODE        : %u\n", target_node);
     printf("[+] CONTROLLER NODE    : 1\n");
     printf("[+] WAITING FOR        : 84 07\n");
-    printf("[+] TX #1              : 85 02 01\n");
-    printf("[+] TX #2              : 85 01 01 01\n");
+    printf("[+] OEM PLAN           : 9 COMMANDS\n");
     printf("[+] FINAL TX           : 84 08\n");
     printf("[+] AUTOMATIC RETRIES  : NONE\n");
     printf("[+] INITIAL GATE       : DISARMED\n");
@@ -10520,39 +10513,60 @@ static int run_dch_z110_real_association_once(int fd, uint8_t target_node)
 
         printf("\n");
         printf("[+] REAL WAKE DETECTED : Node%u / 84 07\n", target_node);
-        printf("[+] SESSION            : ASSOCIATION ONLY\n");
+        printf("[+] SESSION            : FULL OEM PROVISIONING\n");
 
         /*
          * ----------------------------------------------------
-         * TX #1 - OEM-proven Association Get Group 1
+         * FULL OEM DCH-Z110 PROVISIONING PLAN
+         * ----------------------------------------------------
+         *
+         *  1  Association Get Group 1
+         *  2  Association Set Group 1 -> Controller Node1
+         *  3  Contact parameter 3
+         *  4  Contact parameter 8
+         *  5  Contact parameter 11
+         *  6  Temperature parameter 21
+         *  7  Temperature parameter 5
+         *  8  Temperature parameter 13
+         *  9  Ambient Light parameter 22
+         *
+         * Every command still passes through the strict
+         * DCH-Z110 real-transport gate.
          * ----------------------------------------------------
          */
-        if (dch_z110_real_tx_one(
-                fd,
-                target_node,
-                association_get,
-                sizeof(association_get),
-                "ASSOCIATION_GET_GROUP_1") != 0) {
+        if (dch_z110_build_oem_plan(target_node, &plan) != 0 ||
+            plan.count != DCH_Z110_PLAN_MAX) {
+            printf("[-] OEM PLAN BUILD FAILED\n");
             oem_transport_gate_disarm();
             oem_shadow_cmdq_reset();
             return 1;
         }
 
-        /*
-         * ----------------------------------------------------
-         * TX #2 - OEM-proven Association Set Group1 -> Node1
-         * ----------------------------------------------------
-         */
-        if (dch_z110_real_tx_one(
-                fd,
-                target_node,
-                association_set,
-                sizeof(association_set),
-                "ASSOCIATION_SET_GROUP_1_TO_CONTROLLER_1") != 0) {
-            oem_transport_gate_disarm();
-            oem_shadow_cmdq_reset();
-            return 1;
+        printf("[+] OEM PLAN           : %zu COMMANDS\n", plan.count);
+
+        for (i = 0; i < plan.count; i++) {
+            printf("\n");
+            printf("[+] OEM TX %zu/%zu       : %s\n",
+                   i + 1,
+                   plan.count,
+                   plan.command[i].name);
+
+            if (dch_z110_real_tx_one(
+                    fd,
+                    target_node,
+                    plan.command[i].data,
+                    plan.command[i].len,
+                    plan.command[i].name) != 0) {
+                printf("[-] OEM PLAN FAILED    : command %zu/%zu\n",
+                       i + 1,
+                       plan.count);
+                oem_transport_gate_disarm();
+                oem_shadow_cmdq_reset();
+                return 1;
+            }
         }
+
+        printf("\n[+] OEM PLAN           : 9/9 TX OK\n");
 
         /*
          * ----------------------------------------------------
@@ -10575,7 +10589,7 @@ static int run_dch_z110_real_association_once(int fd, uint8_t target_node)
 
         printf("\n");
         printf("============================================================\n");
-        printf(" DCH-Z110 REAL ASSOCIATION RESULT\n");
+        printf(" DCH-Z110 REAL PROVISIONING RESULT\n");
         printf("============================================================\n");
         printf("[+] WAKE              : Node%u / 84 07\n", target_node);
         printf("[+] ASSOCIATION GET   : TX OK\n");
@@ -10903,9 +10917,9 @@ int main(int argc, char **argv)
                 return EXIT_FAILURE;
             }
 
-            if (atoi(argv[2]) != 3 && atoi(argv[2]) != 4) {
+            if (atoi(argv[2]) < 3 || atoi(argv[2]) > 11) {
                 fprintf(stderr,
-                        "ERROR: solo Node3 o Node4 estan permitidos\n");
+                        "ERROR: solo Nodes 3..11 estan permitidos para DCH-Z110\n");
                 return EXIT_FAILURE;
             }
 
