@@ -24,6 +24,17 @@
 #define REQUEST  0x00
 #define MAX_FRAME 256
 
+/*
+ * Bernal Home liveness.
+ *
+ * TEST value: 120 seconds.
+ * Production value after validation: 30 * 60 seconds.
+ *
+ * This is entirely passive. No Z-Wave polling or RF TX.
+ */
+#define BERNAL_ONLINE_TIMEOUT_SEC (30 * 60)
+#define BERNAL_IDLE_RETURN_SEC      5
+
 #define DCH_Z110_FIRST_NODE 3
 #define DCH_Z110_LAST_NODE  11
 #define DCH_Z110_NODE_COUNT \
@@ -46,6 +57,14 @@ struct dch_z110_state {
     int sensor01_raw;
 
     time_t last_seen;
+
+    /*
+     * Runtime liveness uses CLOCK_MONOTONIC so NTP/time corrections
+     * cannot make a node falsely online/offline.
+     * These fields are intentionally NOT persisted.
+     */
+    time_t last_seen_mono;
+    int seen_this_run;
 };
 
 static struct dch_z110_state nodes[DCH_Z110_NODE_COUNT];
@@ -180,6 +199,16 @@ static void handle_signal(int sig)
 {
     (void)sig;
     running = 0;
+}
+
+static time_t monotonic_seconds(void)
+{
+    struct timespec ts;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+        return 0;
+
+    return ts.tv_sec;
 }
 
 static void timestamp(char *buf, size_t size)
@@ -369,17 +398,30 @@ static int receive_frame(int fd,
 
     *frame_len = 0;
 
-    while (running) {
-        r = read_byte_timeout(fd, &b, 500);
+    {
+        int idle_ticks = 0;
 
-        if (r < 0)
-            return -1;
+        while (running) {
+            r = read_byte_timeout(fd, &b, 500);
 
-        if (r == 0)
-            continue;
+            if (r < 0)
+                return -1;
 
-        if (b == SOF)
-            break;
+            if (r == 0) {
+                idle_ticks++;
+
+                if (idle_ticks >=
+                    (BERNAL_IDLE_RETURN_SEC * 1000) / 500)
+                    return 2;
+
+                continue;
+            }
+
+            idle_ticks = 0;
+
+            if (b == SOF)
+                break;
+        }
     }
 
     if (!running)
@@ -477,8 +519,19 @@ static void write_node_json(FILE *fp,
     fprintf(fp, "      \"node\": %u,\n",
             (unsigned int)node_id);
     fprintf(fp, "      \"device\": \"DCH-Z110\",\n");
-    fprintf(fp, "      \"online\": %s,\n",
-            state->last_seen != 0 ? "true" : "false");
+    {
+        time_t mono_now = monotonic_seconds();
+        int online =
+            state->last_seen != 0 &&
+            state->seen_this_run &&
+            state->last_seen_mono != 0 &&
+            mono_now >= state->last_seen_mono &&
+            (mono_now - state->last_seen_mono)
+                <= BERNAL_ONLINE_TIMEOUT_SEC;
+
+        fprintf(fp, "      \"online\": %s,\n",
+                online ? "true" : "false");
+    }
 
     fprintf(fp, "      \"contact\": \"%s\",\n",
             !state->contact_known ? "unknown" :
@@ -816,6 +869,8 @@ static void decode_application_command(const uint8_t *frame,
         return;
 
     state->last_seen = time(NULL);
+    state->last_seen_mono = monotonic_seconds();
+    state->seen_this_run = 1;
 
     if (command_len >= 3 &&
         command[0] == 0x8F &&
@@ -971,6 +1026,13 @@ int main(int argc, char **argv)
 
         if (r == 1)
             break;
+
+        if (r == 2) {
+            if (write_state_json() < 0)
+                fprintf(stderr,
+                        "[!] Periodic state refresh failed\n");
+            continue;
+        }
 
         if (r < 0) {
             if (running)
