@@ -178,6 +178,13 @@ static int load_state_json(void)
 
                 memset(&tm_seen, 0, sizeof(tm_seen));
 
+                /*
+                 * Let mktime() determine DST from the configured
+                 * timezone.  tm_isdst == 0 would force standard time
+                 * and shift restored CEST timestamps by +1 hour.
+                 */
+                tm_seen.tm_isdst = -1;
+
                 if (strptime(text,
                              "%Y-%m-%d %H:%M:%S",
                              &tm_seen) != NULL) {

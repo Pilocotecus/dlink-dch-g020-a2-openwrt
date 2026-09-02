@@ -4,11 +4,51 @@ START=95
 STOP=10
 USE_PROCD=1
 
+STATE_DIR="/tmp/bernal-home"
+STATE_FILE="$STATE_DIR/state.json"
+HISTORY_FILE="$STATE_DIR/history.jsonl"
+
+PERSIST_DIR="/etc/bernal-home"
+PERSIST_STATE="$PERSIST_DIR/state.json"
+PERSIST_HISTORY="$PERSIST_DIR/history.jsonl"
+
 start_service() {
+    mkdir -p "$STATE_DIR"
+
+    # Restaurar último estado tras reboot completo
+    if [ ! -f "$STATE_FILE" ] && [ -f "$PERSIST_STATE" ]; then
+        cp "$PERSIST_STATE" "$STATE_FILE"
+        echo "Bernal Home: state restored from flash"
+    fi
+
+    # Restaurar histórico tras reboot completo
+    if [ ! -f "$HISTORY_FILE" ] && [ -f "$PERSIST_HISTORY" ]; then
+        cp "$PERSIST_HISTORY" "$HISTORY_FILE"
+        echo "Bernal Home: history restored from flash"
+    fi
+
     procd_open_instance
     procd_set_param command /usr/bin/bernal-zwave-daemon /dev/ttyACM0
-    procd_set_param respawn 5 5 0
-    procd_set_param stdout 1
-    procd_set_param stderr 1
+    procd_set_param respawn
     procd_close_instance
+}
+
+stop_service() {
+    mkdir -p "$PERSIST_DIR"
+
+    # Una única escritura del estado al parar/reiniciar
+    if [ -s "$STATE_FILE" ]; then
+        cp "$STATE_FILE" "$PERSIST_STATE.tmp" &&
+        mv "$PERSIST_STATE.tmp" "$PERSIST_STATE"
+        echo "Bernal Home: state checkpoint saved"
+    fi
+
+    # Una única escritura del histórico al parar/reiniciar
+    if [ -s "$HISTORY_FILE" ]; then
+        cp "$HISTORY_FILE" "$PERSIST_HISTORY.tmp" &&
+        mv "$PERSIST_HISTORY.tmp" "$PERSIST_HISTORY"
+        echo "Bernal Home: history checkpoint saved"
+    fi
+
+    sync
 }
