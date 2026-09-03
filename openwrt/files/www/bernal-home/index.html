@@ -1226,6 +1226,62 @@ function filteredHistoryEvents() {
     });
 }
 
+function historyParseTime(value) {
+    const raw = String(value || "").trim();
+
+    if (!raw)
+        return null;
+
+    /*
+     * DCH local:
+     *     2026-09-03 18:38:55
+     *
+     * API remoto:
+     *     2026-09-03T18:38:55+02:00
+     *
+     * Admitimos ambos formatos.
+     */
+    const normalized =
+        raw.includes("T")
+            ? raw
+            : raw.replace(" ", "T");
+
+    const date = new Date(normalized);
+
+    if (Number.isNaN(date.getTime()))
+        return null;
+
+    return date;
+}
+
+function historyFormatDuration(seconds) {
+    seconds = Math.max(
+        0,
+        Math.round(Number(seconds) || 0)
+    );
+
+    if (seconds < 60)
+        return seconds + " s";
+
+    const minutes =
+        Math.floor(seconds / 60);
+
+    if (minutes < 60)
+        return minutes + " min";
+
+    const hours =
+        Math.floor(minutes / 60);
+
+    const remainingMinutes =
+        minutes % 60;
+
+    if (!remainingMinutes)
+        return hours + " h";
+
+    return hours + " h " +
+           remainingMinutes + " min";
+}
+
 function renderHistorySummary() {
     const container =
         document.getElementById("history-summary");
@@ -1235,68 +1291,192 @@ function renderHistorySummary() {
 
     const today = historyTodayString();
 
-    const counts = new Map();
+    /*
+     * Estadísticas por sensor:
+     *
+     * opens       -> número de aperturas hoy
+     * secondsOpen -> tiempo acumulado abierto
+     * openAt      -> apertura todavía pendiente de cierre
+     * isOpen      -> estado calculado del sensor
+     */
+    const stats = new Map();
 
-    historyEvents.forEach(event => {
-        if (event.state !== "open")
-            return;
+    const events =
+        [...historyEvents]
+            .filter(event =>
+                String(event.time || "")
+                    .slice(0, 10) === today
+            )
+            .sort((a, b) => {
+                const ta =
+                    historyParseTime(a.time)?.getTime() || 0;
 
-        const eventDate =
-            String(event.time || "").slice(0, 10);
+                const tb =
+                    historyParseTime(b.time)?.getTime() || 0;
 
-        if (eventDate !== today)
-            return;
+                return ta - tb;
+            });
 
+    events.forEach(event => {
         const name =
-            event.name || ("Node " + event.node);
+            event.name ||
+            ("Node " + event.node);
 
-        counts.set(
-            name,
-            (counts.get(name) || 0) + 1
-        );
+        if (!stats.has(name)) {
+            stats.set(name, {
+                opens: 0,
+                secondsOpen: 0,
+                openAt: null,
+                isOpen: false
+            });
+        }
+
+        const stat =
+            stats.get(name);
+
+        const time =
+            historyParseTime(event.time);
+
+        if (!time)
+            return;
+
+        if (event.state === "open") {
+
+            stat.opens += 1;
+
+            /*
+             * Evitamos sustituir una apertura pendiente
+             * si llegara algún evento OPEN duplicado.
+             */
+            if (!stat.isOpen)
+                stat.openAt = time;
+
+            stat.isOpen = true;
+
+        } else if (event.state === "closed") {
+
+            if (stat.isOpen && stat.openAt) {
+                const elapsed =
+                    (
+                        time.getTime() -
+                        stat.openAt.getTime()
+                    ) / 1000;
+
+                if (elapsed >= 0)
+                    stat.secondsOpen += elapsed;
+            }
+
+            stat.openAt = null;
+            stat.isOpen = false;
+        }
+    });
+
+    /*
+     * Si continúa abierto en este momento,
+     * añadimos el tiempo transcurrido hasta ahora.
+     */
+    const now = new Date();
+
+    stats.forEach(stat => {
+        if (stat.isOpen && stat.openAt) {
+            const elapsed =
+                (
+                    now.getTime() -
+                    stat.openAt.getTime()
+                ) / 1000;
+
+            if (elapsed >= 0)
+                stat.currentSeconds =
+                    elapsed;
+            else
+                stat.currentSeconds = 0;
+        } else {
+            stat.currentSeconds = 0;
+        }
     });
 
     container.innerHTML = "";
 
-    if (!counts.size) {
+    if (!stats.size) {
         const item =
             document.createElement("div");
 
-        item.className = "history-summary-item";
+        item.className =
+            "history-summary-item";
+
         item.innerHTML =
-            '<div class="history-summary-name">Hoy</div>' +
-            '<div class="history-summary-value">0 aperturas</div>';
+            '<div class="history-summary-name">' +
+            'Hoy' +
+            '</div>' +
+            '<div class="history-summary-value">' +
+            'Sin actividad' +
+            '</div>';
 
         container.appendChild(item);
         return;
     }
 
-    Array.from(counts.entries())
-        .sort((a, b) => a[0].localeCompare(b[0]))
-        .forEach(([name, total]) => {
+    Array.from(stats.entries())
+        .sort((a, b) =>
+            a[0].localeCompare(b[0])
+        )
+        .forEach(([name, stat]) => {
 
             const item =
                 document.createElement("div");
 
-            item.className = "history-summary-item";
+            item.className =
+                "history-summary-item";
 
             const label =
                 document.createElement("div");
 
-            label.className = "history-summary-name";
+            label.className =
+                "history-summary-name";
+
             label.textContent = name;
 
             const value =
                 document.createElement("div");
 
-            value.className = "history-summary-value";
+            value.className =
+                "history-summary-value";
+
             value.textContent =
-                total + (total === 1
+                stat.opens +
+                (stat.opens === 1
                     ? " apertura"
                     : " aperturas");
 
+            const detail =
+                document.createElement("div");
+
+            detail.className =
+                "history-summary-name";
+
+            detail.style.marginTop = "6px";
+
+            const totalSeconds =
+                stat.secondsOpen +
+                stat.currentSeconds;
+
+            if (stat.isOpen) {
+                detail.textContent =
+                    "🔴 ABIERTA · " +
+                    historyFormatDuration(
+                        totalSeconds
+                    );
+            } else {
+                detail.textContent =
+                    "Tiempo abierta: " +
+                    historyFormatDuration(
+                        totalSeconds
+                    );
+            }
+
             item.appendChild(label);
             item.appendChild(value);
+            item.appendChild(detail);
 
             container.appendChild(item);
         });
