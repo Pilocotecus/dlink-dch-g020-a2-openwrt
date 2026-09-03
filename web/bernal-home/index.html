@@ -351,6 +351,82 @@ main {
         background: rgba(139,92,246,.08);
     }
 
+
+.watch-panel {
+    background: #1e293b;
+    border-radius: 20px;
+    padding: 18px 20px;
+    margin-bottom: 16px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.20);
+}
+
+.watch-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+}
+
+.watch-title {
+    font-size: 17px;
+    font-weight: 800;
+}
+
+.watch-subtitle {
+    margin-top: 5px;
+    color: #94a3b8;
+    font-size: 12px;
+}
+
+.watch-button {
+    border: 0;
+    border-radius: 12px;
+    padding: 10px 14px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 800;
+}
+
+.watch-button-off {
+    background: #334155;
+    color: #e2e8f0;
+}
+
+.watch-button-on {
+    background: #16a34a;
+    color: #fff;
+}
+
+.watch-state {
+    margin-top: 14px;
+    padding: 12px;
+    border-radius: 12px;
+    font-weight: 800;
+    text-align: center;
+}
+
+.watch-disarmed {
+    background: rgba(148,163,184,.10);
+    color: #94a3b8;
+}
+
+.watch-secure {
+    background: rgba(74,222,128,.10);
+    color: #4ade80;
+}
+
+.watch-alert {
+    background: rgba(251,113,133,.12);
+    color: #fb7185;
+}
+
+.watch-nodes {
+    margin-top: 8px;
+    color: #94a3b8;
+    font-size: 11px;
+    text-align: center;
+}
+
 </style>
 </head>
 
@@ -382,6 +458,43 @@ main {
     </div>
 </div>
 
+
+
+
+<div class="watch-panel">
+
+    <div class="watch-header">
+
+        <div>
+            <div class="watch-title">
+                🛡️ Modo vigilancia
+            </div>
+
+            <div class="watch-subtitle">
+                Control de accesos principales
+            </div>
+        </div>
+
+        <button
+            id="watch-toggle"
+            class="watch-button watch-button-off"
+            type="button">
+            ACTIVAR
+        </button>
+
+    </div>
+
+    <div
+        id="watch-state"
+        class="watch-state watch-disarmed">
+        VIGILANCIA DESACTIVADA
+    </div>
+
+    <div class="watch-nodes">
+        Puerta pérgola · Puerta principal · Puerta trasera
+    </div>
+
+</div>
 
 
 <div class="card" data-node="3">
@@ -1097,6 +1210,7 @@ async function updateState() {
         }
 
         updateDashboard(nodes);
+        updateWatchPanel(nodes);
     }
     catch (error) {
         errorBox.style.display = "block";
@@ -1111,8 +1225,192 @@ async function updateState() {
         }
 
         updateDashboard(null);
+        updateWatchPanel(null);
     }
 }
+
+
+const BERNAL_WATCH_NODES = ["3", "4", "7"];
+const BERNAL_WATCH_STORAGE =
+    "bernal-home-watch-enabled";
+
+let bernalWatchEnabled =
+    localStorage.getItem(
+        BERNAL_WATCH_STORAGE
+    ) === "1";
+
+let bernalLastNodes = null;
+
+function bernalWatchNode(nodes, id) {
+    if (!nodes)
+        return null;
+
+    /*
+     * state.json puede llegar como objeto
+     * indexado o como array.
+     */
+    if (nodes[id] !== undefined)
+        return nodes[id];
+
+    const numeric = Number(id);
+
+    if (nodes[numeric] !== undefined)
+        return nodes[numeric];
+
+    if (Array.isArray(nodes)) {
+        return nodes.find(
+            node =>
+                String(node?.node) === id
+        ) || null;
+    }
+
+    return null;
+}
+
+function bernalWatchName(id, node) {
+    if (node?.name)
+        return node.name;
+
+    if (id === "3")
+        return "Puerta pérgola";
+
+    if (id === "4")
+        return "Puerta principal";
+
+    if (id === "7")
+        return "Puerta trasera";
+
+    return "Node " + id;
+}
+
+function bernalWatchOpenDoors(nodes) {
+    return BERNAL_WATCH_NODES
+        .map(id => {
+            const node =
+                bernalWatchNode(nodes, id);
+
+            if (!node ||
+                node.contact !== "open")
+                return null;
+
+            return bernalWatchName(
+                id,
+                node
+            );
+        })
+        .filter(Boolean);
+}
+
+function updateWatchPanel(nodes) {
+    bernalLastNodes = nodes;
+
+    const button =
+        document.getElementById(
+            "watch-toggle"
+        );
+
+    const state =
+        document.getElementById(
+            "watch-state"
+        );
+
+    if (!button || !state)
+        return;
+
+    button.classList.remove(
+        "watch-button-off",
+        "watch-button-on"
+    );
+
+    state.classList.remove(
+        "watch-disarmed",
+        "watch-secure",
+        "watch-alert"
+    );
+
+    if (!bernalWatchEnabled) {
+        button.textContent =
+            "ACTIVAR";
+
+        button.classList.add(
+            "watch-button-off"
+        );
+
+        state.textContent =
+            "VIGILANCIA DESACTIVADA";
+
+        state.classList.add(
+            "watch-disarmed"
+        );
+
+        return;
+    }
+
+    button.textContent =
+        "DESACTIVAR";
+
+    button.classList.add(
+        "watch-button-on"
+    );
+
+    const openDoors =
+        bernalWatchOpenDoors(nodes);
+
+    if (!openDoors.length) {
+        state.textContent =
+            "✓ ACCESOS PROTEGIDOS";
+
+        state.classList.add(
+            "watch-secure"
+        );
+
+        return;
+    }
+
+    state.textContent =
+        "⚠ ALERTA · " +
+        openDoors.join(", ");
+
+    state.classList.add(
+        "watch-alert"
+    );
+}
+
+function toggleWatchMode() {
+    bernalWatchEnabled =
+        !bernalWatchEnabled;
+
+    localStorage.setItem(
+        BERNAL_WATCH_STORAGE,
+        bernalWatchEnabled
+            ? "1"
+            : "0"
+    );
+
+    updateWatchPanel(
+        bernalLastNodes
+    );
+}
+
+document.addEventListener(
+    "DOMContentLoaded",
+    () => {
+        const button =
+            document.getElementById(
+                "watch-toggle"
+            );
+
+        if (button)
+            button.addEventListener(
+                "click",
+                toggleWatchMode
+            );
+
+        updateWatchPanel(
+            bernalLastNodes
+        );
+    }
+);
 
 updateState();
 setInterval(updateState, 1000);
