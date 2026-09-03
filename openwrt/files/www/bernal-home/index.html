@@ -1,0 +1,1686 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#111827">
+<link rel="manifest" href="manifest.json">
+
+<title>Bernal Home</title>
+
+<style>
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: -apple-system, BlinkMacSystemFont,
+                 "Segoe UI", sans-serif;
+    background: #0f172a;
+    color: #f8fafc;
+}
+
+header {
+    padding: 28px 20px 18px;
+    text-align: center;
+}
+
+header h1 {
+    margin: 0;
+    font-size: 30px;
+}
+
+header p {
+    margin: 7px 0 0;
+    color: #94a3b8;
+}
+
+main {
+    width: min(92%, 560px);
+    margin: auto;
+    padding-bottom: 40px;
+}
+
+.card {
+    background: #1e293b;
+    border-radius: 20px;
+    padding: 22px;
+    margin-bottom: 16px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.20);
+}
+
+.device-title {
+    color: #94a3b8;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.contact {
+    text-align: center;
+    margin: 24px 0;
+}
+
+.contact-icon {
+    font-size: 54px;
+}
+
+.contact-state {
+    font-size: 32px;
+    font-weight: 800;
+    margin-top: 8px;
+}
+
+.open {
+    color: #fb7185;
+}
+
+.closed {
+    color: #4ade80;
+}
+
+.unknown {
+    color: #facc15;
+}
+
+.grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+.info {
+    background: #0f172a;
+    padding: 15px;
+    border-radius: 14px;
+}
+
+.label {
+    color: #94a3b8;
+    font-size: 13px;
+}
+
+.value {
+    font-size: 18px;
+    font-weight: 700;
+    margin-top: 5px;
+}
+
+.last-seen {
+    text-align: center;
+    color: #94a3b8;
+    font-size: 13px;
+    margin-top: 20px;
+}
+
+.status {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    margin-right: 6px;
+}
+
+.status-online {
+    background: #4ade80;
+}
+
+.status-offline {
+    background: #fb7185;
+}
+
+#error {
+    display: none;
+    background: #7f1d1d;
+    padding: 12px;
+    border-radius: 12px;
+    margin-bottom: 15px;
+}
+
+.dashboard {
+    background: #1e293b;
+    border-radius: 20px;
+    padding: 22px;
+    margin-bottom: 16px;
+    text-align: center;
+    box-shadow: 0 8px 24px rgba(0,0,0,.20);
+}
+
+.dashboard-icon {
+    font-size: 42px;
+    margin-bottom: 8px;
+}
+
+.dashboard-state {
+    font-size: 25px;
+    font-weight: 800;
+}
+
+.dashboard-detail {
+    margin-top: 7px;
+    color: #94a3b8;
+    font-size: 14px;
+}
+
+.dashboard-ok {
+    color: #4ade80;
+}
+
+.dashboard-alert {
+    color: #fb7185;
+}
+
+.dashboard-unknown {
+    color: #facc15;
+}
+
+
+    .history-card {
+        background: #1e293b;
+        border-radius: 20px;
+        padding: 20px;
+        margin-top: 16px;
+        box-shadow: 0 8px 24px rgba(0,0,0,.20);
+    }
+
+    .history-title {
+        font-size: 18px;
+        font-weight: 800;
+        margin-bottom: 14px;
+    }
+
+    .history-controls {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+        margin-bottom: 14px;
+    }
+
+    .history-control {
+        width: 100%;
+        box-sizing: border-box;
+        background: #0f172a;
+        color: #e2e8f0;
+        border: 1px solid rgba(148,163,184,.25);
+        border-radius: 10px;
+        padding: 9px 10px;
+        font-size: 13px;
+        outline: none;
+    }
+
+    .history-control:focus {
+        border-color: rgba(96,165,250,.75);
+    }
+
+    .history-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 10px;
+        color: #94a3b8;
+        font-size: 12px;
+    }
+
+    .history-summary {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 8px;
+        margin-bottom: 14px;
+    }
+
+    .history-summary-item {
+        background: #0f172a;
+        border: 1px solid rgba(148,163,184,.18);
+        border-radius: 10px;
+        padding: 10px;
+    }
+
+    .history-summary-name {
+        color: #94a3b8;
+        font-size: 11px;
+        margin-bottom: 3px;
+    }
+
+    .history-summary-value {
+        font-size: 18px;
+        font-weight: 800;
+    }
+
+    .history-reset {
+        background: transparent;
+        color: #93c5fd;
+        border: 1px solid rgba(147,197,253,.25);
+        border-radius: 9px;
+        padding: 6px 9px;
+        cursor: pointer;
+        font-size: 12px;
+    }
+
+    .history-reset:hover {
+        background: rgba(147,197,253,.08);
+    }
+
+    .history-date {
+        color: #64748b;
+        font-size: 11px;
+        margin-top: 2px;
+    }
+
+    @media (max-width: 760px) {
+        .history-controls {
+            grid-template-columns: 1fr 1fr;
+        }
+    }
+
+    @media (max-width: 480px) {
+        .history-controls {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    .history-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .history-event {
+        display: grid;
+        grid-template-columns: 52px 1fr auto;
+        gap: 10px;
+        align-items: center;
+        padding: 11px 0;
+        border-bottom: 1px solid rgba(148,163,184,.15);
+    }
+
+    .history-event:last-child {
+        border-bottom: 0;
+    }
+
+    .history-time {
+        color: #94a3b8;
+        font-size: 13px;
+        font-variant-numeric: tabular-nums;
+    }
+
+    .history-name {
+        font-size: 14px;
+        font-weight: 600;
+    }
+
+    .history-state {
+        font-size: 12px;
+        font-weight: 800;
+    }
+
+    .history-open {
+        color: #fb7185;
+    }
+
+    .history-closed {
+        color: #4ade80;
+    }
+
+    .history-empty {
+        color: #94a3b8;
+        text-align: center;
+        padding: 14px 0;
+        font-size: 14px;
+    }
+
+</style>
+</head>
+
+<body>
+
+<header>
+    <h1>Bernal Home</h1>
+    <p>Control local Z-Wave</p>
+</header>
+
+<main>
+
+<div id="error">
+    No se puede leer el estado del controlador.
+</div>
+
+
+<div class="dashboard">
+    <div id="dashboard-icon" class="dashboard-icon">🏠</div>
+
+    <div id="dashboard-state"
+         class="dashboard-state dashboard-unknown">
+        COMPROBANDO CASA...
+    </div>
+
+    <div id="dashboard-detail"
+         class="dashboard-detail">
+        Esperando estado de las puertas
+    </div>
+</div>
+
+
+
+<div class="card" data-node="3">
+
+    <div class="device-title">
+        Puerta pérgola · DCH-Z110 · Node 3
+    </div>
+
+    <div class="contact">
+        <div class="contact-icon">🚪</div>
+        <div id="contact-3"
+             class="contact-state unknown">
+            DESCONOCIDO
+        </div>
+    </div>
+
+    <div class="grid">
+
+        <div class="info">
+            <div class="label">Controlador</div>
+            <div id="online-3" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Batería</div>
+            <div id="battery-3" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Luminosidad</div>
+            <div id="luminance-3" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Temperatura</div>
+            <div id="temperature-3" class="value">...</div>
+        </div>
+
+    </div>
+
+    <div id="lastSeen-3" class="last-seen">
+        Esperando datos...
+    </div>
+
+</div>
+
+
+<div class="card" data-node="4">
+
+    <div class="device-title">
+        Puerta principal · DCH-Z110 · Node 4
+    </div>
+
+    <div class="contact">
+        <div class="contact-icon">🚪</div>
+        <div id="contact-4"
+             class="contact-state unknown">
+            DESCONOCIDO
+        </div>
+    </div>
+
+    <div class="grid">
+
+        <div class="info">
+            <div class="label">Controlador</div>
+            <div id="online-4" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Batería</div>
+            <div id="battery-4" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Luminosidad</div>
+            <div id="luminance-4" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Temperatura</div>
+            <div id="temperature-4" class="value">...</div>
+        </div>
+
+    </div>
+
+    <div id="lastSeen-4" class="last-seen">
+        Esperando datos...
+    </div>
+
+</div>
+
+
+<div class="card" data-node="5">
+
+    <div class="device-title">
+        Despacho · DCH-Z110 · Node 5
+    </div>
+
+    <div class="contact">
+        <div class="contact-icon">🚪</div>
+        <div id="contact-5"
+             class="contact-state unknown">
+            DESCONOCIDO
+        </div>
+    </div>
+
+    <div class="grid">
+
+        <div class="info">
+            <div class="label">Controlador</div>
+            <div id="online-5" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Batería</div>
+            <div id="battery-5" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Luminosidad</div>
+            <div id="luminance-5" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Temperatura</div>
+            <div id="temperature-5" class="value">...</div>
+        </div>
+
+    </div>
+
+    <div id="lastSeen-5" class="last-seen">
+        Esperando datos...
+    </div>
+
+</div>
+
+
+<div class="card" data-node="6">
+
+    <div class="device-title">
+        Habitación Laura · DCH-Z110 · Node 6
+    </div>
+
+    <div class="contact">
+        <div class="contact-icon">🚪</div>
+        <div id="contact-6"
+             class="contact-state unknown">
+            DESCONOCIDO
+        </div>
+    </div>
+
+    <div class="grid">
+
+        <div class="info">
+            <div class="label">Controlador</div>
+            <div id="online-6" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Batería</div>
+            <div id="battery-6" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Luminosidad</div>
+            <div id="luminance-6" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Temperatura</div>
+            <div id="temperature-6" class="value">...</div>
+        </div>
+
+    </div>
+
+    <div id="lastSeen-6" class="last-seen">
+        Esperando datos...
+    </div>
+
+</div>
+
+
+<div class="card" data-node="7">
+
+    <div class="device-title">
+        Puerta trasera · DCH-Z110 · Node 7
+    </div>
+
+    <div class="contact">
+        <div class="contact-icon">🚪</div>
+        <div id="contact-7"
+             class="contact-state unknown">
+            DESCONOCIDO
+        </div>
+    </div>
+
+    <div class="grid">
+
+        <div class="info">
+            <div class="label">Controlador</div>
+            <div id="online-7" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Batería</div>
+            <div id="battery-7" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Luminosidad</div>
+            <div id="luminance-7" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Temperatura</div>
+            <div id="temperature-7" class="value">...</div>
+        </div>
+
+    </div>
+
+    <div id="lastSeen-7" class="last-seen">
+        Esperando datos...
+    </div>
+
+</div>
+
+
+<div class="card" data-node="8">
+
+    <div class="device-title">
+        Pérgola 2 · DCH-Z110 · Node 8
+    </div>
+
+    <div class="contact">
+        <div class="contact-icon">🚪</div>
+        <div id="contact-8"
+             class="contact-state unknown">
+            DESCONOCIDO
+        </div>
+    </div>
+
+    <div class="grid">
+
+        <div class="info">
+            <div class="label">Controlador</div>
+            <div id="online-8" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Batería</div>
+            <div id="battery-8" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Luminosidad</div>
+            <div id="luminance-8" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Temperatura</div>
+            <div id="temperature-8" class="value">...</div>
+        </div>
+
+    </div>
+
+    <div id="lastSeen-8" class="last-seen">
+        Esperando datos...
+    </div>
+
+</div>
+
+
+<div class="card" data-node="9">
+
+    <div class="device-title">
+        Vestidor · DCH-Z110 · Node 9
+    </div>
+
+    <div class="contact">
+        <div class="contact-icon">🚪</div>
+        <div id="contact-9"
+             class="contact-state unknown">
+            DESCONOCIDO
+        </div>
+    </div>
+
+    <div class="grid">
+
+        <div class="info">
+            <div class="label">Controlador</div>
+            <div id="online-9" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Batería</div>
+            <div id="battery-9" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Luminosidad</div>
+            <div id="luminance-9" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Temperatura</div>
+            <div id="temperature-9" class="value">...</div>
+        </div>
+
+    </div>
+
+    <div id="lastSeen-9" class="last-seen">
+        Esperando datos...
+    </div>
+
+</div>
+
+
+<div class="card" data-node="10">
+
+    <div class="device-title">
+        Sala tele · DCH-Z110 · Node 10
+    </div>
+
+    <div class="contact">
+        <div class="contact-icon">🚪</div>
+        <div id="contact-10"
+             class="contact-state unknown">
+            DESCONOCIDO
+        </div>
+    </div>
+
+    <div class="grid">
+
+        <div class="info">
+            <div class="label">Controlador</div>
+            <div id="online-10" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Batería</div>
+            <div id="battery-10" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Luminosidad</div>
+            <div id="luminance-10" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Temperatura</div>
+            <div id="temperature-10" class="value">...</div>
+        </div>
+
+    </div>
+
+    <div id="lastSeen-10" class="last-seen">
+        Esperando datos...
+    </div>
+
+</div>
+
+
+<div class="card" data-node="11">
+
+    <div class="device-title">
+        Habitación matrimonio · DCH-Z110 · Node 11
+    </div>
+
+    <div class="contact">
+        <div class="contact-icon">🚪</div>
+        <div id="contact-11"
+             class="contact-state unknown">
+            DESCONOCIDO
+        </div>
+    </div>
+
+    <div class="grid">
+
+        <div class="info">
+            <div class="label">Controlador</div>
+            <div id="online-11" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Batería</div>
+            <div id="battery-11" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Luminosidad</div>
+            <div id="luminance-11" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Temperatura</div>
+            <div id="temperature-11" class="value">...</div>
+        </div>
+
+    </div>
+
+    <div id="lastSeen-11" class="last-seen">
+        Esperando datos...
+    </div>
+
+</div>
+
+
+<div class="card" style="text-align:center">
+    <div class="device-title">Notificaciones</div>
+    <button id="push-button"
+            style="margin-top:14px;padding:14px 22px;border:0;border-radius:14px;font-size:16px;font-weight:700;cursor:pointer">
+        🔔 Activar notificaciones
+    </button>
+    <div id="push-status"
+         style="margin-top:10px;color:#94a3b8;font-size:13px">
+        Avisos de seguridad BA Home
+    </div>
+</div>
+
+<div class="history-card">
+        <div class="history-title">Actividad reciente</div>
+
+        <div class="history-controls">
+
+            <select id="history-node"
+                    class="history-control">
+                <option value="">Todos los sensores</option>
+            </select>
+
+            <select id="history-state"
+                    class="history-control">
+                <option value="">Todos los estados</option>
+                <option value="open">Abiertas</option>
+                <option value="closed">Cerradas</option>
+            </select>
+
+            <input id="history-search"
+                   class="history-control"
+                   type="search"
+                   placeholder="Buscar sensor...">
+
+            <select id="history-limit"
+                    class="history-control">
+                <option value="12">12 eventos</option>
+                <option value="25" selected>25 eventos</option>
+                <option value="50">50 eventos</option>
+                <option value="100">100 eventos</option>
+            </select>
+
+            <input id="history-date"
+                   class="history-control"
+                   type="date">
+
+        </div>
+
+        <div id="history-summary"
+             class="history-summary"></div>
+
+        <div class="history-toolbar">
+            <div id="history-count">
+                Cargando actividad...
+            </div>
+
+            <button id="history-reset"
+                    class="history-reset"
+                    type="button">
+                Limpiar filtros
+            </button>
+        </div>
+
+        <div id="history-list" class="history-list">
+            <div class="history-empty">
+                Cargando actividad...
+            </div>
+        </div>
+    </div>
+
+</main>
+
+<script>
+const errorBox = document.getElementById("error");
+
+function updateNode(nodeId, state) {
+    const contact =
+        document.getElementById("contact-" + nodeId);
+
+    const online =
+        document.getElementById("online-" + nodeId);
+
+    const battery =
+        document.getElementById("battery-" + nodeId);
+
+    const luminance =
+        document.getElementById("luminance-" + nodeId);
+
+    const temperature =
+        document.getElementById("temperature-" + nodeId);
+
+    const lastSeen =
+        document.getElementById("lastSeen-" + nodeId);
+
+    contact.className = "contact-state";
+
+    if (!state) {
+        contact.textContent = "DESCONOCIDO";
+        contact.classList.add("unknown");
+
+        online.innerHTML =
+            '<span class="status status-offline"></span>Sin datos';
+
+        battery.textContent = "—";
+        luminance.textContent = "—";
+        temperature.textContent = "—";
+
+        lastSeen.textContent =
+            "Esperando primera comunicación";
+
+        return;
+    }
+
+    if (state.contact === "open") {
+        contact.textContent = "ABIERTA";
+        contact.classList.add("open");
+    }
+    else if (state.contact === "closed") {
+        contact.textContent = "CERRADA";
+        contact.classList.add("closed");
+    }
+    else {
+        contact.textContent = "DESCONOCIDO";
+        contact.classList.add("unknown");
+    }
+
+    if (state.online) {
+        online.innerHTML =
+            '<span class="status status-online"></span>En línea';
+    }
+    else {
+        online.innerHTML =
+            '<span class="status status-offline"></span>Sin datos';
+    }
+
+    if (!state.battery_known) {
+        battery.textContent = "—";
+    }
+    else if (state.battery_low) {
+        battery.textContent = "⚠ Baja";
+    }
+    else if (state.battery_percent !== null &&
+             state.battery_percent !== undefined) {
+        battery.textContent =
+            state.battery_percent + "%";
+    }
+    else {
+        battery.textContent = "No calibrada";
+    }
+
+    luminance.textContent =
+        state.luminance_percent === null ||
+        state.luminance_percent === undefined
+            ? "—"
+            : state.luminance_percent + " %";
+
+    temperature.textContent =
+        state.temperature_c === null ||
+        state.temperature_c === undefined
+            ? "—"
+            : Number(state.temperature_c).toFixed(1) + " °C";
+
+    if (state.last_seen &&
+        state.last_seen !== "never") {
+        lastSeen.textContent =
+            "Última comunicación: " +
+            state.last_seen;
+    }
+    else {
+        lastSeen.textContent =
+            "Esperando primera comunicación";
+    }
+}
+
+
+
+const OPEN_WARNING_SECONDS = 120;
+
+const doorTimers = {
+    "3": { state: null, openedAt: null },
+    "4": { state: null, openedAt: null },
+    "7": { state: null, openedAt: null }
+};
+
+function trackDoor(nodeId, node) {
+    const timer = doorTimers[nodeId];
+
+    if (!node || !timer)
+        return;
+
+    const current = node.contact;
+
+    if (current === "open" && timer.state !== "open")
+        timer.openedAt = Date.now();
+
+    if (current === "closed")
+        timer.openedAt = null;
+
+    timer.state = current;
+}
+
+function openMinutes(nodeId) {
+    const timer = doorTimers[nodeId];
+
+    if (!timer || !timer.openedAt)
+        return 0;
+
+    return Math.floor(
+        (Date.now() - timer.openedAt) / 60000
+    );
+}
+
+function updateDashboard(nodes) {
+    const icon =
+        document.getElementById("dashboard-icon");
+
+    const state =
+        document.getElementById("dashboard-state");
+
+    const detail =
+        document.getElementById("dashboard-detail");
+
+    state.className = "dashboard-state";
+
+    const monitoredDoors = {
+        "3": "Puerta pérgola",
+        "4": "Puerta principal",
+        "7": "Puerta trasera"
+    };
+
+    const openDoors = [];
+    const unknownDoors = [];
+
+    Object.keys(monitoredDoors).forEach(nodeId => {
+        const node = nodes ? nodes[nodeId] : null;
+
+        trackDoor(nodeId, node);
+
+        if (!node ||
+            !node.online ||
+            (node.contact !== "open" &&
+             node.contact !== "closed")) {
+            unknownDoors.push(monitoredDoors[nodeId]);
+            return;
+        }
+
+        if (node.contact === "open")
+            openDoors.push(monitoredDoors[nodeId]);
+    });
+
+    if (openDoors.length > 0) {
+        icon.textContent = "⚠️";
+
+        state.textContent =
+            openDoors.length === 1
+                ? "PUERTA ABIERTA"
+                : "PUERTAS ABIERTAS";
+
+        state.classList.add("dashboard-alert");
+
+        detail.textContent =
+            openDoors.join(" · ");
+
+        return;
+    }
+
+    if (unknownDoors.length > 0) {
+        icon.textContent = "🏠";
+        state.textContent = "ESTADO INCOMPLETO";
+        state.classList.add("dashboard-unknown");
+
+        detail.textContent =
+            "Sin comunicación: " +
+            unknownDoors.join(" · ");
+
+        return;
+    }
+
+    icon.textContent = "🔒";
+    state.textContent = "TODO CERRADO";
+    state.classList.add("dashboard-ok");
+
+    detail.textContent =
+        "Puerta principal, puerta pérgola y puerta trasera protegidas";
+}
+
+async function updateState() {
+    try {
+        const response =
+            await fetch("state.json?t=" + Date.now(), {
+                cache: "no-store"
+            });
+
+        if (!response.ok)
+            throw new Error("HTTP " + response.status);
+
+        const state = await response.json();
+
+        errorBox.style.display = "none";
+
+        const nodes = state.nodes || {};
+
+        for (let nodeId = 3; nodeId <= 11; nodeId++) {
+            const id = String(nodeId);
+            updateNode(id, nodes[id]);
+        }
+
+        updateDashboard(nodes);
+    }
+    catch (error) {
+        errorBox.style.display = "block";
+        errorBox.textContent =
+            "ERROR FRONTEND: " +
+            (error && error.message ? error.message : String(error));
+
+        console.error("Bernal Home updateState:", error);
+
+        for (let nodeId = 3; nodeId <= 11; nodeId++) {
+            updateNode(String(nodeId), null);
+        }
+
+        updateDashboard(null);
+    }
+}
+
+updateState();
+setInterval(updateState, 1000);
+
+let historyEvents = [];
+let historyControlsReady = false;
+
+function historyEventDateParts(value) {
+    const raw = String(value || "");
+    const parts = raw.split(" ");
+
+    return {
+        date: parts[0] || "",
+        time: parts.length > 1
+            ? parts[1].slice(0, 5)
+            : "--:--"
+    };
+}
+
+function historyTodayString() {
+    const now = new Date();
+
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, "0");
+    const d = String(now.getDate()).padStart(2, "0");
+
+    return `${y}-${m}-${d}`;
+}
+
+function historyDisplayDate(date) {
+    if (!date)
+        return "";
+
+    const parts = date.split("-");
+
+    if (parts.length !== 3)
+        return date;
+
+    return `${parts[2]}/${parts[1]}/${parts[0]}`;
+}
+
+function populateHistoryNodes(events) {
+    const select = document.getElementById("history-node");
+
+    if (!select)
+        return;
+
+    const selected = select.value;
+
+    const nodes = new Map();
+
+    events.forEach(event => {
+        if (event.node === undefined ||
+            event.node === null)
+            return;
+
+        nodes.set(
+            String(event.node),
+            event.name || ("Node " + event.node)
+        );
+    });
+
+    const ordered = Array.from(nodes.entries())
+        .sort((a, b) => Number(a[0]) - Number(b[0]));
+
+    select.innerHTML =
+        '<option value="">Todos los sensores</option>';
+
+    ordered.forEach(([node, name]) => {
+        const option = document.createElement("option");
+
+        option.value = node;
+        option.textContent = name;
+
+        select.appendChild(option);
+    });
+
+    if (nodes.has(selected))
+        select.value = selected;
+}
+
+function filteredHistoryEvents() {
+    const node =
+        document.getElementById("history-node")?.value || "";
+
+    const state =
+        document.getElementById("history-state")?.value || "";
+
+    const search =
+        (
+            document.getElementById("history-search")?.value ||
+            ""
+        )
+        .trim()
+        .toLowerCase();
+
+    const date =
+        document.getElementById("history-date")?.value || "";
+
+    return historyEvents.filter(event => {
+
+        if (node &&
+            String(event.node) !== node)
+            return false;
+
+        if (state &&
+            event.state !== state)
+            return false;
+
+        if (search) {
+            const name =
+                String(
+                    event.name ||
+                    ("Node " + event.node)
+                ).toLowerCase();
+
+            if (!name.includes(search))
+                return false;
+        }
+
+        if (date) {
+            const eventDate =
+                String(event.time || "").slice(0, 10);
+
+            if (eventDate !== date)
+                return false;
+        }
+
+        return true;
+    });
+}
+
+function renderHistorySummary() {
+    const container =
+        document.getElementById("history-summary");
+
+    if (!container)
+        return;
+
+    const today = historyTodayString();
+
+    const counts = new Map();
+
+    historyEvents.forEach(event => {
+        if (event.state !== "open")
+            return;
+
+        const eventDate =
+            String(event.time || "").slice(0, 10);
+
+        if (eventDate !== today)
+            return;
+
+        const name =
+            event.name || ("Node " + event.node);
+
+        counts.set(
+            name,
+            (counts.get(name) || 0) + 1
+        );
+    });
+
+    container.innerHTML = "";
+
+    if (!counts.size) {
+        const item =
+            document.createElement("div");
+
+        item.className = "history-summary-item";
+        item.innerHTML =
+            '<div class="history-summary-name">Hoy</div>' +
+            '<div class="history-summary-value">0 aperturas</div>';
+
+        container.appendChild(item);
+        return;
+    }
+
+    Array.from(counts.entries())
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .forEach(([name, total]) => {
+
+            const item =
+                document.createElement("div");
+
+            item.className = "history-summary-item";
+
+            const label =
+                document.createElement("div");
+
+            label.className = "history-summary-name";
+            label.textContent = name;
+
+            const value =
+                document.createElement("div");
+
+            value.className = "history-summary-value";
+            value.textContent =
+                total + (total === 1
+                    ? " apertura"
+                    : " aperturas");
+
+            item.appendChild(label);
+            item.appendChild(value);
+
+            container.appendChild(item);
+        });
+}
+
+function renderHistory() {
+    const list =
+        document.getElementById("history-list");
+
+    const count =
+        document.getElementById("history-count");
+
+    const limitElement =
+        document.getElementById("history-limit");
+
+    if (!list)
+        return;
+
+    const filtered = filteredHistoryEvents();
+
+    const limit = Number(
+        limitElement?.value || 25
+    );
+
+    const visible =
+        filtered.slice(-limit).reverse();
+
+    if (count) {
+        count.textContent =
+            `${visible.length} de ${filtered.length} eventos`;
+    }
+
+    if (!visible.length) {
+        list.innerHTML =
+            '<div class="history-empty">' +
+            'No hay eventos con estos filtros' +
+            '</div>';
+        return;
+    }
+
+    list.innerHTML = "";
+
+    const today = historyTodayString();
+
+    visible.forEach(event => {
+
+        const row =
+            document.createElement("div");
+
+        row.className = "history-event";
+
+        const time =
+            document.createElement("div");
+
+        time.className = "history-time";
+
+        const parts =
+            historyEventDateParts(event.time);
+
+        time.textContent = parts.time;
+
+        if (parts.date &&
+            parts.date !== today) {
+
+            const date =
+                document.createElement("div");
+
+            date.className = "history-date";
+            date.textContent =
+                historyDisplayDate(parts.date);
+
+            time.appendChild(date);
+        }
+
+        const name =
+            document.createElement("div");
+
+        name.className = "history-name";
+        name.textContent =
+            event.name ||
+            ("Node " + event.node);
+
+        const state =
+            document.createElement("div");
+
+        state.className = "history-state";
+
+        if (event.state === "open") {
+
+            state.textContent = "ABIERTA";
+            state.classList.add(
+                "history-open"
+            );
+
+        } else {
+
+            state.textContent = "CERRADA";
+            state.classList.add(
+                "history-closed"
+            );
+        }
+
+        row.appendChild(time);
+        row.appendChild(name);
+        row.appendChild(state);
+
+        list.appendChild(row);
+    });
+}
+
+function setupHistoryControls() {
+
+    if (historyControlsReady)
+        return;
+
+    historyControlsReady = true;
+
+    [
+        "history-node",
+        "history-state",
+        "history-limit",
+        "history-date"
+    ].forEach(id => {
+
+        const element =
+            document.getElementById(id);
+
+        if (element)
+            element.addEventListener(
+                "change",
+                renderHistory
+            );
+    });
+
+    const search =
+        document.getElementById(
+            "history-search"
+        );
+
+    if (search)
+        search.addEventListener(
+            "input",
+            renderHistory
+        );
+
+    const reset =
+        document.getElementById(
+            "history-reset"
+        );
+
+    if (reset) {
+        reset.addEventListener(
+            "click",
+            () => {
+
+                document.getElementById(
+                    "history-node"
+                ).value = "";
+
+                document.getElementById(
+                    "history-state"
+                ).value = "";
+
+                document.getElementById(
+                    "history-search"
+                ).value = "";
+
+                document.getElementById(
+                    "history-limit"
+                ).value = "25";
+
+                document.getElementById(
+                    "history-date"
+                ).value = "";
+
+                renderHistory();
+            }
+        );
+    }
+}
+
+async function updateHistory() {
+    try {
+        /*
+         * Bernal Home local:
+         * history.jsonl is served directly by the DCH-G020.
+         *
+         * This avoids CORS and keeps history available even if
+         * the Internet/API server is unreachable.
+         */
+        const response = await fetch(
+            "history.jsonl?t=" + Date.now(),
+            { cache: "no-store" }
+        );
+
+        if (!response.ok)
+            throw new Error(
+                "history.jsonl HTTP " + response.status
+            );
+
+        const text = await response.text();
+
+        const events = text
+            .split(/\r?\n/)
+            .map(line => line.trim())
+            .filter(Boolean)
+            .map((line, index) => {
+                try {
+                    return JSON.parse(line);
+                }
+                catch (error) {
+                    console.warn(
+                        "Bernal Home: línea histórica inválida",
+                        index + 1,
+                        line
+                    );
+                    return null;
+                }
+            })
+            .filter(Boolean);
+
+        historyEvents = events;
+
+        populateHistoryNodes(historyEvents);
+        setupHistoryControls();
+        renderHistorySummary();
+        renderHistory();
+    }
+    catch (error) {
+        console.error("BA Home history:", error);
+
+        const list =
+            document.getElementById("history-list");
+
+        const count =
+            document.getElementById("history-count");
+
+        if (count)
+            count.textContent = "Historial no disponible";
+
+        if (list)
+            list.innerHTML =
+                '<div class="history-empty">' +
+                'Historial no disponible' +
+                '</div>';
+    }
+}
+
+updateHistory();
+setInterval(updateHistory, 3000);
+
+</script>
+
+
+<script>
+if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+        navigator.serviceWorker.register("service-worker.js")
+            .catch(error => {
+                console.error("Service Worker:", error);
+            });
+    });
+}
+</script>
+
+
+<script>
+const BA_PUSH_API =
+    "https://familiabernalalcaraz.com/bernal-home-api/api";
+
+const BA_VAPID_PUBLIC =
+    "BIk1qgMcRYqKUeE6leGD4edLq2l9Q2OL8WysTpTRD3lYgLJtySdzHTycUxcalp2aGhuQXMnPG0PNuFdVz3VDUhY";
+
+function urlBase64ToUint8Array(base64String) {
+    const padding =
+        "=".repeat((4 - base64String.length % 4) % 4);
+
+    const base64 =
+        (base64String + padding)
+            .replace(/-/g, "+")
+            .replace(/_/g, "/");
+
+    const raw = atob(base64);
+
+    return Uint8Array.from(
+        [...raw].map(c => c.charCodeAt(0))
+    );
+}
+
+async function activatePush() {
+    const button =
+        document.getElementById("push-button");
+
+    const status =
+        document.getElementById("push-status");
+
+    try {
+        button.disabled = true;
+        status.textContent =
+            "Solicitando permiso...";
+
+        const permission =
+            await Notification.requestPermission();
+
+        if (permission !== "granted") {
+            status.textContent =
+                "Permiso de notificaciones no concedido";
+            button.disabled = false;
+            return;
+        }
+
+        const registration =
+            await navigator.serviceWorker.ready;
+
+        let subscription =
+            await registration.pushManager.getSubscription();
+
+        if (!subscription) {
+            subscription =
+                await registration.pushManager.subscribe({
+                    userVisibleOnly: true,
+                    applicationServerKey:
+                        urlBase64ToUint8Array(
+                            BA_VAPID_PUBLIC
+                        )
+                });
+        }
+
+        const response = await fetch(
+            BA_PUSH_API + "/subscribe",
+            {
+                method: "POST",
+                headers: {
+                    "Content-Type":
+                        "application/json"
+                },
+                body: JSON.stringify(
+                    subscription.toJSON()
+                )
+            }
+        );
+
+        if (!response.ok)
+            throw new Error(
+                "Servidor HTTP " + response.status
+            );
+
+        const result = await response.json();
+
+        status.textContent =
+            "✓ Notificaciones activadas";
+
+        button.textContent =
+            "🔔 Notificaciones activadas";
+
+        console.log(
+            "BA Home push:",
+            result
+        );
+    }
+    catch (error) {
+        console.error("BA Home Push:", error);
+
+        status.textContent =
+            "No se pudieron activar las notificaciones";
+
+        button.disabled = false;
+    }
+}
+
+document.addEventListener(
+    "DOMContentLoaded",
+    () => {
+        const button =
+            document.getElementById("push-button");
+
+        if (button)
+            button.addEventListener(
+                "click",
+                activatePush
+            );
+    }
+);
+</script>
+
+</body>
+</html>
