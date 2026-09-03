@@ -192,6 +192,96 @@ main {
         margin-bottom: 14px;
     }
 
+    .history-controls {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+        margin-bottom: 14px;
+    }
+
+    .history-control {
+        width: 100%;
+        box-sizing: border-box;
+        background: #0f172a;
+        color: #e2e8f0;
+        border: 1px solid rgba(148,163,184,.25);
+        border-radius: 10px;
+        padding: 9px 10px;
+        font-size: 13px;
+        outline: none;
+    }
+
+    .history-control:focus {
+        border-color: rgba(96,165,250,.75);
+    }
+
+    .history-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 10px;
+        color: #94a3b8;
+        font-size: 12px;
+    }
+
+    .history-summary {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 8px;
+        margin-bottom: 14px;
+    }
+
+    .history-summary-item {
+        background: #0f172a;
+        border: 1px solid rgba(148,163,184,.18);
+        border-radius: 10px;
+        padding: 10px;
+    }
+
+    .history-summary-name {
+        color: #94a3b8;
+        font-size: 11px;
+        margin-bottom: 3px;
+    }
+
+    .history-summary-value {
+        font-size: 18px;
+        font-weight: 800;
+    }
+
+    .history-reset {
+        background: transparent;
+        color: #93c5fd;
+        border: 1px solid rgba(147,197,253,.25);
+        border-radius: 9px;
+        padding: 6px 9px;
+        cursor: pointer;
+        font-size: 12px;
+    }
+
+    .history-reset:hover {
+        background: rgba(147,197,253,.08);
+    }
+
+    .history-date {
+        color: #64748b;
+        font-size: 11px;
+        margin-top: 2px;
+    }
+
+    @media (max-width: 760px) {
+        .history-controls {
+            grid-template-columns: 1fr 1fr;
+        }
+    }
+
+    @media (max-width: 480px) {
+        .history-controls {
+            grid-template-columns: 1fr;
+        }
+    }
+
     .history-list {
         display: flex;
         flex-direction: column;
@@ -274,49 +364,6 @@ main {
 </div>
 
 
-<div class="card" data-node="4">
-
-    <div class="device-title">
-        Puerta principal · DCH-Z110 · Node 4
-    </div>
-
-    <div class="contact">
-        <div class="contact-icon">🚪</div>
-        <div id="contact-4"
-             class="contact-state unknown">
-            DESCONOCIDO
-        </div>
-    </div>
-
-    <div class="grid">
-
-        <div class="info">
-            <div class="label">Controlador</div>
-            <div id="online-4" class="value">...</div>
-        </div>
-
-        <div class="info">
-            <div class="label">Batería</div>
-            <div id="battery-4" class="value">...</div>
-        </div>
-
-        <div class="info">
-            <div class="label">Luminosidad</div>
-            <div id="luminance-4" class="value">...</div>
-        </div>
-
-        <div class="info">
-            <div class="label">Temperatura</div>
-            <div id="temperature-4" class="value">...</div>
-        </div>
-
-    </div>
-
-    <div id="lastSeen-4" class="last-seen">
-        Esperando datos...
-    </div>
-
-</div>
 
 <div class="card" data-node="3">
 
@@ -363,7 +410,366 @@ main {
 </div>
 
 
-    
+<div class="card" data-node="4">
+
+    <div class="device-title">
+        Puerta principal · DCH-Z110 · Node 4
+    </div>
+
+    <div class="contact">
+        <div class="contact-icon">🚪</div>
+        <div id="contact-4"
+             class="contact-state unknown">
+            DESCONOCIDO
+        </div>
+    </div>
+
+    <div class="grid">
+
+        <div class="info">
+            <div class="label">Controlador</div>
+            <div id="online-4" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Batería</div>
+            <div id="battery-4" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Luminosidad</div>
+            <div id="luminance-4" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Temperatura</div>
+            <div id="temperature-4" class="value">...</div>
+        </div>
+
+    </div>
+
+    <div id="lastSeen-4" class="last-seen">
+        Esperando datos...
+    </div>
+
+</div>
+
+
+<div class="card" data-node="5">
+
+    <div class="device-title">
+        Despacho · DCH-Z110 · Node 5
+    </div>
+
+    <div class="contact">
+        <div class="contact-icon">🚪</div>
+        <div id="contact-5"
+             class="contact-state unknown">
+            DESCONOCIDO
+        </div>
+    </div>
+
+    <div class="grid">
+
+        <div class="info">
+            <div class="label">Controlador</div>
+            <div id="online-5" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Batería</div>
+            <div id="battery-5" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Luminosidad</div>
+            <div id="luminance-5" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Temperatura</div>
+            <div id="temperature-5" class="value">...</div>
+        </div>
+
+    </div>
+
+    <div id="lastSeen-5" class="last-seen">
+        Esperando datos...
+    </div>
+
+</div>
+
+
+<div class="card" data-node="6">
+
+    <div class="device-title">
+        Habitación Laura · DCH-Z110 · Node 6
+    </div>
+
+    <div class="contact">
+        <div class="contact-icon">🚪</div>
+        <div id="contact-6"
+             class="contact-state unknown">
+            DESCONOCIDO
+        </div>
+    </div>
+
+    <div class="grid">
+
+        <div class="info">
+            <div class="label">Controlador</div>
+            <div id="online-6" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Batería</div>
+            <div id="battery-6" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Luminosidad</div>
+            <div id="luminance-6" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Temperatura</div>
+            <div id="temperature-6" class="value">...</div>
+        </div>
+
+    </div>
+
+    <div id="lastSeen-6" class="last-seen">
+        Esperando datos...
+    </div>
+
+</div>
+
+
+<div class="card" data-node="7">
+
+    <div class="device-title">
+        Puerta trasera · DCH-Z110 · Node 7
+    </div>
+
+    <div class="contact">
+        <div class="contact-icon">🚪</div>
+        <div id="contact-7"
+             class="contact-state unknown">
+            DESCONOCIDO
+        </div>
+    </div>
+
+    <div class="grid">
+
+        <div class="info">
+            <div class="label">Controlador</div>
+            <div id="online-7" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Batería</div>
+            <div id="battery-7" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Luminosidad</div>
+            <div id="luminance-7" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Temperatura</div>
+            <div id="temperature-7" class="value">...</div>
+        </div>
+
+    </div>
+
+    <div id="lastSeen-7" class="last-seen">
+        Esperando datos...
+    </div>
+
+</div>
+
+
+<div class="card" data-node="8">
+
+    <div class="device-title">
+        Pérgola 2 · DCH-Z110 · Node 8
+    </div>
+
+    <div class="contact">
+        <div class="contact-icon">🚪</div>
+        <div id="contact-8"
+             class="contact-state unknown">
+            DESCONOCIDO
+        </div>
+    </div>
+
+    <div class="grid">
+
+        <div class="info">
+            <div class="label">Controlador</div>
+            <div id="online-8" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Batería</div>
+            <div id="battery-8" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Luminosidad</div>
+            <div id="luminance-8" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Temperatura</div>
+            <div id="temperature-8" class="value">...</div>
+        </div>
+
+    </div>
+
+    <div id="lastSeen-8" class="last-seen">
+        Esperando datos...
+    </div>
+
+</div>
+
+
+<div class="card" data-node="9">
+
+    <div class="device-title">
+        Vestidor · DCH-Z110 · Node 9
+    </div>
+
+    <div class="contact">
+        <div class="contact-icon">🚪</div>
+        <div id="contact-9"
+             class="contact-state unknown">
+            DESCONOCIDO
+        </div>
+    </div>
+
+    <div class="grid">
+
+        <div class="info">
+            <div class="label">Controlador</div>
+            <div id="online-9" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Batería</div>
+            <div id="battery-9" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Luminosidad</div>
+            <div id="luminance-9" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Temperatura</div>
+            <div id="temperature-9" class="value">...</div>
+        </div>
+
+    </div>
+
+    <div id="lastSeen-9" class="last-seen">
+        Esperando datos...
+    </div>
+
+</div>
+
+
+<div class="card" data-node="10">
+
+    <div class="device-title">
+        Sala tele · DCH-Z110 · Node 10
+    </div>
+
+    <div class="contact">
+        <div class="contact-icon">🚪</div>
+        <div id="contact-10"
+             class="contact-state unknown">
+            DESCONOCIDO
+        </div>
+    </div>
+
+    <div class="grid">
+
+        <div class="info">
+            <div class="label">Controlador</div>
+            <div id="online-10" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Batería</div>
+            <div id="battery-10" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Luminosidad</div>
+            <div id="luminance-10" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Temperatura</div>
+            <div id="temperature-10" class="value">...</div>
+        </div>
+
+    </div>
+
+    <div id="lastSeen-10" class="last-seen">
+        Esperando datos...
+    </div>
+
+</div>
+
+
+<div class="card" data-node="11">
+
+    <div class="device-title">
+        Habitación matrimonio · DCH-Z110 · Node 11
+    </div>
+
+    <div class="contact">
+        <div class="contact-icon">🚪</div>
+        <div id="contact-11"
+             class="contact-state unknown">
+            DESCONOCIDO
+        </div>
+    </div>
+
+    <div class="grid">
+
+        <div class="info">
+            <div class="label">Controlador</div>
+            <div id="online-11" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Batería</div>
+            <div id="battery-11" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Luminosidad</div>
+            <div id="luminance-11" class="value">...</div>
+        </div>
+
+        <div class="info">
+            <div class="label">Temperatura</div>
+            <div id="temperature-11" class="value">...</div>
+        </div>
+
+    </div>
+
+    <div id="lastSeen-11" class="last-seen">
+        Esperando datos...
+    </div>
+
+</div>
+
+
 <div class="card" style="text-align:center">
     <div class="device-title">Notificaciones</div>
     <button id="push-button"
@@ -378,6 +784,54 @@ main {
 
 <div class="history-card">
         <div class="history-title">Actividad reciente</div>
+
+        <div class="history-controls">
+
+            <select id="history-node"
+                    class="history-control">
+                <option value="">Todos los sensores</option>
+            </select>
+
+            <select id="history-state"
+                    class="history-control">
+                <option value="">Todos los estados</option>
+                <option value="open">Abiertas</option>
+                <option value="closed">Cerradas</option>
+            </select>
+
+            <input id="history-search"
+                   class="history-control"
+                   type="search"
+                   placeholder="Buscar sensor...">
+
+            <select id="history-limit"
+                    class="history-control">
+                <option value="12">12 eventos</option>
+                <option value="25" selected>25 eventos</option>
+                <option value="50">50 eventos</option>
+                <option value="100">100 eventos</option>
+            </select>
+
+            <input id="history-date"
+                   class="history-control"
+                   type="date">
+
+        </div>
+
+        <div id="history-summary"
+             class="history-summary"></div>
+
+        <div class="history-toolbar">
+            <div id="history-count">
+                Cargando actividad...
+            </div>
+
+            <button id="history-reset"
+                    class="history-reset"
+                    type="button">
+                Limpiar filtros
+            </button>
+        </div>
 
         <div id="history-list" class="history-list">
             <div class="history-empty">
@@ -496,7 +950,8 @@ const OPEN_WARNING_SECONDS = 120;
 
 const doorTimers = {
     "3": { state: null, openedAt: null },
-    "4": { state: null, openedAt: null }
+    "4": { state: null, openedAt: null },
+    "7": { state: null, openedAt: null }
 };
 
 function trackDoor(nodeId, node) {
@@ -527,7 +982,7 @@ function openMinutes(nodeId) {
     );
 }
 
-function updateDashboard(node4, node3) {
+function updateDashboard(nodes) {
     const icon =
         document.getElementById("dashboard-icon");
 
@@ -539,40 +994,66 @@ function updateDashboard(node4, node3) {
 
     state.className = "dashboard-state";
 
-    if (!node4 || !node3) {
+    const monitoredDoors = {
+        "3": "Puerta pérgola",
+        "4": "Puerta principal",
+        "7": "Puerta trasera"
+    };
+
+    const openDoors = [];
+    const unknownDoors = [];
+
+    Object.keys(monitoredDoors).forEach(nodeId => {
+        const node = nodes ? nodes[nodeId] : null;
+
+        trackDoor(nodeId, node);
+
+        if (!node ||
+            !node.online ||
+            (node.contact !== "open" &&
+             node.contact !== "closed")) {
+            unknownDoors.push(monitoredDoors[nodeId]);
+            return;
+        }
+
+        if (node.contact === "open")
+            openDoors.push(monitoredDoors[nodeId]);
+    });
+
+    if (openDoors.length > 0) {
+        icon.textContent = "⚠️";
+
+        state.textContent =
+            openDoors.length === 1
+                ? "PUERTA ABIERTA"
+                : "PUERTAS ABIERTAS";
+
+        state.classList.add("dashboard-alert");
+
+        detail.textContent =
+            openDoors.join(" · ");
+
+        return;
+    }
+
+    if (unknownDoors.length > 0) {
         icon.textContent = "🏠";
         state.textContent = "ESTADO INCOMPLETO";
         state.classList.add("dashboard-unknown");
+
         detail.textContent =
-            "Esperando comunicación de las puertas";
+            "Sin comunicación: " +
+            unknownDoors.join(" · ");
+
         return;
     }
 
-    const openDoors = [];
+    icon.textContent = "🔒";
+    state.textContent = "TODO CERRADO";
+    state.classList.add("dashboard-ok");
 
-    if (node4.contact === "open")
-        openDoors.push("Puerta principal");
-
-    if (node3.contact === "open")
-        openDoors.push("Puerta pérgola");
-
-    if (openDoors.length === 0) {
-        icon.textContent = "🔒";
-        state.textContent = "TODO CERRADO";
-        state.classList.add("dashboard-ok");
-        detail.textContent =
-            "Puerta principal y puerta pérgola protegidas";
-        return;
-    }
-
-    icon.textContent = "⚠️";
-    state.textContent =
-        openDoors.length === 1
-            ? "PUERTA ABIERTA"
-            : "PUERTAS ABIERTAS";
-
-    state.classList.add("dashboard-alert");
-    detail.textContent = openDoors.join(" · ");
+    detail.textContent =
+        "Puerta principal, puerta pérgola y puerta trasera protegidas";
 }
 
 async function updateState() {
@@ -591,60 +1072,331 @@ async function updateState() {
 
         const nodes = state.nodes || {};
 
-        updateNode("4", nodes["4"]);
-        updateNode("3", nodes["3"]);
-        updateDashboard(nodes["4"], nodes["3"]);
+        for (let nodeId = 3; nodeId <= 11; nodeId++) {
+            const id = String(nodeId);
+            updateNode(id, nodes[id]);
+        }
+
+        updateDashboard(nodes);
     }
     catch (error) {
         errorBox.style.display = "block";
-        updateNode("4", null);
-        updateNode("3", null);
-        updateDashboard(null, null);
+        errorBox.textContent =
+            "ERROR FRONTEND: " +
+            (error && error.message ? error.message : String(error));
+
+        console.error("Bernal Home updateState:", error);
+
+        for (let nodeId = 3; nodeId <= 11; nodeId++) {
+            updateNode(String(nodeId), null);
+        }
+
+        updateDashboard(null);
     }
 }
 
 updateState();
 setInterval(updateState, 1000);
 
-function renderHistory(events) {
-    const list = document.getElementById("history-list");
+let historyEvents = [];
+let historyControlsReady = false;
+
+function historyEventDateParts(value) {
+    const raw = String(value || "");
+    const parts = raw.split(" ");
+
+    return {
+        date: parts[0] || "",
+        time: parts.length > 1
+            ? parts[1].slice(0, 5)
+            : "--:--"
+    };
+}
+
+function historyTodayString() {
+    const now = new Date();
+
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, "0");
+    const d = String(now.getDate()).padStart(2, "0");
+
+    return `${y}-${m}-${d}`;
+}
+
+function historyDisplayDate(date) {
+    if (!date)
+        return "";
+
+    const parts = date.split("-");
+
+    if (parts.length !== 3)
+        return date;
+
+    return `${parts[2]}/${parts[1]}/${parts[0]}`;
+}
+
+function populateHistoryNodes(events) {
+    const select = document.getElementById("history-node");
+
+    if (!select)
+        return;
+
+    const selected = select.value;
+
+    const nodes = new Map();
+
+    events.forEach(event => {
+        if (event.node === undefined ||
+            event.node === null)
+            return;
+
+        nodes.set(
+            String(event.node),
+            event.name || ("Node " + event.node)
+        );
+    });
+
+    const ordered = Array.from(nodes.entries())
+        .sort((a, b) => Number(a[0]) - Number(b[0]));
+
+    select.innerHTML =
+        '<option value="">Todos los sensores</option>';
+
+    ordered.forEach(([node, name]) => {
+        const option = document.createElement("option");
+
+        option.value = node;
+        option.textContent = name;
+
+        select.appendChild(option);
+    });
+
+    if (nodes.has(selected))
+        select.value = selected;
+}
+
+function filteredHistoryEvents() {
+    const node =
+        document.getElementById("history-node")?.value || "";
+
+    const state =
+        document.getElementById("history-state")?.value || "";
+
+    const search =
+        (
+            document.getElementById("history-search")?.value ||
+            ""
+        )
+        .trim()
+        .toLowerCase();
+
+    const date =
+        document.getElementById("history-date")?.value || "";
+
+    return historyEvents.filter(event => {
+
+        if (node &&
+            String(event.node) !== node)
+            return false;
+
+        if (state &&
+            event.state !== state)
+            return false;
+
+        if (search) {
+            const name =
+                String(
+                    event.name ||
+                    ("Node " + event.node)
+                ).toLowerCase();
+
+            if (!name.includes(search))
+                return false;
+        }
+
+        if (date) {
+            const eventDate =
+                String(event.time || "").slice(0, 10);
+
+            if (eventDate !== date)
+                return false;
+        }
+
+        return true;
+    });
+}
+
+function renderHistorySummary() {
+    const container =
+        document.getElementById("history-summary");
+
+    if (!container)
+        return;
+
+    const today = historyTodayString();
+
+    const counts = new Map();
+
+    historyEvents.forEach(event => {
+        if (event.state !== "open")
+            return;
+
+        const eventDate =
+            String(event.time || "").slice(0, 10);
+
+        if (eventDate !== today)
+            return;
+
+        const name =
+            event.name || ("Node " + event.node);
+
+        counts.set(
+            name,
+            (counts.get(name) || 0) + 1
+        );
+    });
+
+    container.innerHTML = "";
+
+    if (!counts.size) {
+        const item =
+            document.createElement("div");
+
+        item.className = "history-summary-item";
+        item.innerHTML =
+            '<div class="history-summary-name">Hoy</div>' +
+            '<div class="history-summary-value">0 aperturas</div>';
+
+        container.appendChild(item);
+        return;
+    }
+
+    Array.from(counts.entries())
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .forEach(([name, total]) => {
+
+            const item =
+                document.createElement("div");
+
+            item.className = "history-summary-item";
+
+            const label =
+                document.createElement("div");
+
+            label.className = "history-summary-name";
+            label.textContent = name;
+
+            const value =
+                document.createElement("div");
+
+            value.className = "history-summary-value";
+            value.textContent =
+                total + (total === 1
+                    ? " apertura"
+                    : " aperturas");
+
+            item.appendChild(label);
+            item.appendChild(value);
+
+            container.appendChild(item);
+        });
+}
+
+function renderHistory() {
+    const list =
+        document.getElementById("history-list");
+
+    const count =
+        document.getElementById("history-count");
+
+    const limitElement =
+        document.getElementById("history-limit");
 
     if (!list)
         return;
 
-    if (!events.length) {
+    const filtered = filteredHistoryEvents();
+
+    const limit = Number(
+        limitElement?.value || 25
+    );
+
+    const visible =
+        filtered.slice(-limit).reverse();
+
+    if (count) {
+        count.textContent =
+            `${visible.length} de ${filtered.length} eventos`;
+    }
+
+    if (!visible.length) {
         list.innerHTML =
-            '<div class="history-empty">Sin actividad registrada</div>';
+            '<div class="history-empty">' +
+            'No hay eventos con estos filtros' +
+            '</div>';
         return;
     }
 
     list.innerHTML = "";
 
-    events.slice(-12).reverse().forEach(event => {
-        const row = document.createElement("div");
+    const today = historyTodayString();
+
+    visible.forEach(event => {
+
+        const row =
+            document.createElement("div");
+
         row.className = "history-event";
 
-        const time = document.createElement("div");
+        const time =
+            document.createElement("div");
+
         time.className = "history-time";
 
-        const parts = String(event.time || "").split(" ");
-        time.textContent = parts.length > 1
-            ? parts[1].slice(0, 5)
-            : "--:--";
+        const parts =
+            historyEventDateParts(event.time);
 
-        const name = document.createElement("div");
+        time.textContent = parts.time;
+
+        if (parts.date &&
+            parts.date !== today) {
+
+            const date =
+                document.createElement("div");
+
+            date.className = "history-date";
+            date.textContent =
+                historyDisplayDate(parts.date);
+
+            time.appendChild(date);
+        }
+
+        const name =
+            document.createElement("div");
+
         name.className = "history-name";
-        name.textContent = event.name || ("Node " + event.node);
+        name.textContent =
+            event.name ||
+            ("Node " + event.node);
 
-        const state = document.createElement("div");
+        const state =
+            document.createElement("div");
+
         state.className = "history-state";
 
         if (event.state === "open") {
+
             state.textContent = "ABIERTA";
-            state.classList.add("history-open");
+            state.classList.add(
+                "history-open"
+            );
+
         } else {
+
             state.textContent = "CERRADA";
-            state.classList.add("history-closed");
+            state.classList.add(
+                "history-closed"
+            );
         }
 
         row.appendChild(time);
@@ -655,32 +1407,141 @@ function renderHistory(events) {
     });
 }
 
+function setupHistoryControls() {
+
+    if (historyControlsReady)
+        return;
+
+    historyControlsReady = true;
+
+    [
+        "history-node",
+        "history-state",
+        "history-limit",
+        "history-date"
+    ].forEach(id => {
+
+        const element =
+            document.getElementById(id);
+
+        if (element)
+            element.addEventListener(
+                "change",
+                renderHistory
+            );
+    });
+
+    const search =
+        document.getElementById(
+            "history-search"
+        );
+
+    if (search)
+        search.addEventListener(
+            "input",
+            renderHistory
+        );
+
+    const reset =
+        document.getElementById(
+            "history-reset"
+        );
+
+    if (reset) {
+        reset.addEventListener(
+            "click",
+            () => {
+
+                document.getElementById(
+                    "history-node"
+                ).value = "";
+
+                document.getElementById(
+                    "history-state"
+                ).value = "";
+
+                document.getElementById(
+                    "history-search"
+                ).value = "";
+
+                document.getElementById(
+                    "history-limit"
+                ).value = "25";
+
+                document.getElementById(
+                    "history-date"
+                ).value = "";
+
+                renderHistory();
+            }
+        );
+    }
+}
+
 async function updateHistory() {
     try {
+        /*
+         * Bernal Home local:
+         * history.jsonl is served directly by the DCH-G020.
+         *
+         * This avoids CORS and keeps history available even if
+         * the Internet/API server is unreachable.
+         */
         const response = await fetch(
-            "https://familiabernalalcaraz.com/bernal-home-api/api/history?t=" +
-            Date.now(),
+            "history.jsonl?t=" + Date.now(),
             { cache: "no-store" }
         );
 
         if (!response.ok)
-            throw new Error("history HTTP " + response.status);
+            throw new Error(
+                "history.jsonl HTTP " + response.status
+            );
 
-        const data = await response.json();
-        const events = Array.isArray(data.events)
-            ? data.events
-            : [];
+        const text = await response.text();
 
-        renderHistory(events);
+        const events = text
+            .split(/\r?\n/)
+            .map(line => line.trim())
+            .filter(Boolean)
+            .map((line, index) => {
+                try {
+                    return JSON.parse(line);
+                }
+                catch (error) {
+                    console.warn(
+                        "Bernal Home: línea histórica inválida",
+                        index + 1,
+                        line
+                    );
+                    return null;
+                }
+            })
+            .filter(Boolean);
+
+        historyEvents = events;
+
+        populateHistoryNodes(historyEvents);
+        setupHistoryControls();
+        renderHistorySummary();
+        renderHistory();
     }
     catch (error) {
         console.error("BA Home history:", error);
 
-        const list = document.getElementById("history-list");
+        const list =
+            document.getElementById("history-list");
+
+        const count =
+            document.getElementById("history-count");
+
+        if (count)
+            count.textContent = "Historial no disponible";
 
         if (list)
             list.innerHTML =
-                '<div class="history-empty">Historial no disponible</div>';
+                '<div class="history-empty">' +
+                'Historial no disponible' +
+                '</div>';
     }
 }
 
