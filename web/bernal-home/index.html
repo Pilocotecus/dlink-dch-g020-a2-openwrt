@@ -332,6 +332,25 @@ main {
         font-size: 14px;
     }
 
+    .history-night {
+        color: #c4b5fd;
+        font-size: 11px;
+        font-weight: 800;
+        margin-top: 4px;
+    }
+
+    .history-night-event {
+        background: rgba(139,92,246,.07);
+        border-radius: 10px;
+        padding-left: 8px;
+        padding-right: 8px;
+    }
+
+    .history-night-summary {
+        border-color: rgba(196,181,253,.35);
+        background: rgba(139,92,246,.08);
+    }
+
 </style>
 </head>
 
@@ -1254,6 +1273,39 @@ function historyParseTime(value) {
     return date;
 }
 
+const BERNAL_NIGHT_START_HOUR = 23;
+const BERNAL_NIGHT_END_HOUR = 7;
+
+function historyIsNight(value) {
+    const date = historyParseTime(value);
+
+    if (!date)
+        return false;
+
+    const hour = date.getHours();
+
+    /*
+     * Franja que atraviesa medianoche:
+     * 23:00 -> 07:00
+     */
+    return (
+        hour >= BERNAL_NIGHT_START_HOUR ||
+        hour < BERNAL_NIGHT_END_HOUR
+    );
+}
+
+function historyNightLabel() {
+    const start =
+        String(BERNAL_NIGHT_START_HOUR)
+            .padStart(2, "0") + ":00";
+
+    const end =
+        String(BERNAL_NIGHT_END_HOUR)
+            .padStart(2, "0") + ":00";
+
+    return start + "–" + end;
+}
+
 function historyFormatDuration(seconds) {
     seconds = Math.max(
         0,
@@ -1397,6 +1449,45 @@ function renderHistorySummary() {
 
     container.innerHTML = "";
 
+    const nightOpenings =
+        events.filter(event =>
+            event.state === "open" &&
+            historyIsNight(event.time)
+        ).length;
+
+    const nightItem =
+        document.createElement("div");
+
+    nightItem.className =
+        "history-summary-item history-night-summary";
+
+    const nightName =
+        document.createElement("div");
+
+    nightName.className =
+        "history-summary-name";
+
+    nightName.textContent =
+        "🌙 Actividad nocturna · " +
+        historyNightLabel();
+
+    const nightValue =
+        document.createElement("div");
+
+    nightValue.className =
+        "history-summary-value";
+
+    nightValue.textContent =
+        nightOpenings +
+        (nightOpenings === 1
+            ? " apertura"
+            : " aperturas");
+
+    nightItem.appendChild(nightName);
+    nightItem.appendChild(nightValue);
+
+    container.appendChild(nightItem);
+
     if (!stats.size) {
         const item =
             document.createElement("div");
@@ -1528,6 +1619,15 @@ function renderHistory() {
 
         row.className = "history-event";
 
+        const night =
+            event.state === "open" &&
+            historyIsNight(event.time);
+
+        if (night)
+            row.classList.add(
+                "history-night-event"
+            );
+
         const time =
             document.createElement("div");
 
@@ -1577,6 +1677,19 @@ function renderHistory() {
             state.classList.add(
                 "history-closed"
             );
+        }
+
+        if (night) {
+            const nightLabel =
+                document.createElement("div");
+
+            nightLabel.className =
+                "history-night";
+
+            nightLabel.textContent =
+                "🌙 NOCTURNA";
+
+            name.appendChild(nightLabel);
         }
 
         row.appendChild(time);
