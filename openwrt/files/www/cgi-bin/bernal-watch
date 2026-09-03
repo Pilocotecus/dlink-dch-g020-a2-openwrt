@@ -1,0 +1,95 @@
+#!/bin/sh
+
+STATE_DIR="/etc/bernal-home"
+STATE_FILE="$STATE_DIR/watch.state"
+
+read_state() {
+    if [ -f "$STATE_FILE" ]; then
+        VALUE="$(cat "$STATE_FILE" 2>/dev/null)"
+    else
+        VALUE="0"
+    fi
+
+    case "$VALUE" in
+        1|true|armed)
+            printf '1'
+            ;;
+        *)
+            printf '0'
+            ;;
+    esac
+}
+
+write_state() {
+    VALUE="$1"
+
+    mkdir -p "$STATE_DIR" || exit 1
+
+    TMP="$STATE_FILE.tmp"
+
+    printf '%s\n' "$VALUE" > "$TMP" || exit 1
+    mv "$TMP" "$STATE_FILE" || exit 1
+}
+
+METHOD="${REQUEST_METHOD:-GET}"
+
+case "$METHOD" in
+
+    GET)
+        ;;
+
+    POST)
+        LENGTH="${CONTENT_LENGTH:-0}"
+
+        case "$LENGTH" in
+            ''|*[!0-9]*)
+                LENGTH=0
+                ;;
+        esac
+
+        BODY=""
+
+        if [ "$LENGTH" -gt 0 ]; then
+            BODY="$(dd bs=1 count="$LENGTH" 2>/dev/null)"
+        fi
+
+        case "$BODY" in
+            *armed=1*|*armed=true*)
+                write_state 1
+                ;;
+            *armed=0*|*armed=false*)
+                write_state 0
+                ;;
+            *)
+                printf 'Status: 400 Bad Request\r\n'
+                printf 'Content-Type: application/json\r\n'
+                printf 'Cache-Control: no-store\r\n'
+                printf '\r\n'
+                printf '{"error":"invalid armed value"}\n'
+                exit 0
+                ;;
+        esac
+        ;;
+
+    *)
+        printf 'Status: 405 Method Not Allowed\r\n'
+        printf 'Allow: GET, POST\r\n'
+        printf 'Content-Type: application/json\r\n'
+        printf '\r\n'
+        printf '{"error":"method not allowed"}\n'
+        exit 0
+        ;;
+esac
+
+ARMED="$(read_state)"
+
+printf 'Content-Type: application/json\r\n'
+printf 'Cache-Control: no-store, no-cache, must-revalidate\r\n'
+printf 'Pragma: no-cache\r\n'
+printf '\r\n'
+
+if [ "$ARMED" = "1" ]; then
+    printf '{"armed":true}\n'
+else
+    printf '{"armed":false}\n'
+fi

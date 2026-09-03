@@ -1231,24 +1231,20 @@ async function updateState() {
 
 
 const BERNAL_WATCH_NODES = ["3", "4", "7"];
-const BERNAL_WATCH_STORAGE =
-    "bernal-home-watch-enabled";
 
-let bernalWatchEnabled =
-    localStorage.getItem(
-        BERNAL_WATCH_STORAGE
-    ) === "1";
+const BERNAL_WATCH_API =
+    "/cgi-bin/bernal-watch";
 
+let bernalWatchEnabled = false;
+let bernalWatchLoaded = false;
+let bernalWatchBusy = false;
 let bernalLastNodes = null;
+
 
 function bernalWatchNode(nodes, id) {
     if (!nodes)
         return null;
 
-    /*
-     * state.json puede llegar como objeto
-     * indexado o como array.
-     */
     if (nodes[id] !== undefined)
         return nodes[id];
 
@@ -1267,6 +1263,7 @@ function bernalWatchNode(nodes, id) {
     return null;
 }
 
+
 function bernalWatchName(id, node) {
     if (node?.name)
         return node.name;
@@ -1282,6 +1279,7 @@ function bernalWatchName(id, node) {
 
     return "Node " + id;
 }
+
 
 function bernalWatchOpenDoors(nodes) {
     return BERNAL_WATCH_NODES
@@ -1301,8 +1299,10 @@ function bernalWatchOpenDoors(nodes) {
         .filter(Boolean);
 }
 
+
 function updateWatchPanel(nodes) {
-    bernalLastNodes = nodes;
+    if (nodes !== undefined)
+        bernalLastNodes = nodes;
 
     const button =
         document.getElementById(
@@ -1328,9 +1328,45 @@ function updateWatchPanel(nodes) {
         "watch-alert"
     );
 
-    if (!bernalWatchEnabled) {
+    /*
+     * Todavía estamos leyendo el estado
+     * persistente del DCH.
+     */
+    if (!bernalWatchLoaded) {
+
+        button.disabled = true;
         button.textContent =
-            "ACTIVAR";
+            "ESPERA...";
+
+        state.textContent =
+            "LEYENDO ESTADO DE VIGILANCIA";
+
+        state.classList.add(
+            "watch-disarmed"
+        );
+
+        return;
+    }
+
+    /*
+     * Escritura en curso.
+     */
+    if (bernalWatchBusy) {
+
+        button.disabled = true;
+        button.textContent =
+            "GUARDANDO...";
+
+    } else {
+
+        button.disabled = false;
+    }
+
+    if (!bernalWatchEnabled) {
+
+        if (!bernalWatchBusy)
+            button.textContent =
+                "ACTIVAR";
 
         button.classList.add(
             "watch-button-off"
@@ -1346,17 +1382,21 @@ function updateWatchPanel(nodes) {
         return;
     }
 
-    button.textContent =
-        "DESACTIVAR";
+    if (!bernalWatchBusy)
+        button.textContent =
+            "DESACTIVAR";
 
     button.classList.add(
         "watch-button-on"
     );
 
     const openDoors =
-        bernalWatchOpenDoors(nodes);
+        bernalWatchOpenDoors(
+            bernalLastNodes
+        );
 
     if (!openDoors.length) {
+
         state.textContent =
             "✓ ACCESOS PROTEGIDOS";
 
@@ -1376,41 +1416,154 @@ function updateWatchPanel(nodes) {
     );
 }
 
-function toggleWatchMode() {
-    bernalWatchEnabled =
-        !bernalWatchEnabled;
 
-    localStorage.setItem(
-        BERNAL_WATCH_STORAGE,
-        bernalWatchEnabled
-            ? "1"
-            : "0"
-    );
+async function loadWatchMode() {
+    try {
+        const response = await fetch(
+            BERNAL_WATCH_API +
+            "?t=" +
+            Date.now(),
+            {
+                cache: "no-store"
+            }
+        );
 
-    updateWatchPanel(
-        bernalLastNodes
-    );
-}
-
-document.addEventListener(
-    "DOMContentLoaded",
-    () => {
-        const button =
-            document.getElementById(
-                "watch-toggle"
+        if (!response.ok)
+            throw new Error(
+                "HTTP " +
+                response.status
             );
 
-        if (button)
-            button.addEventListener(
-                "click",
-                toggleWatchMode
-            );
+        const data =
+            await response.json();
+
+        bernalWatchEnabled =
+            data.armed === true;
+
+        bernalWatchLoaded = true;
 
         updateWatchPanel(
             bernalLastNodes
         );
     }
+    catch (error) {
+
+        console.error(
+            "Bernal Home watch load:",
+            error
+        );
+
+        bernalWatchLoaded = false;
+
+        const state =
+            document.getElementById(
+                "watch-state"
+            );
+
+        if (state)
+            state.textContent =
+                "ERROR LEYENDO VIGILANCIA";
+    }
+}
+
+
+async function setWatchMode(enabled) {
+    if (bernalWatchBusy)
+        return;
+
+    bernalWatchBusy = true;
+
+    updateWatchPanel(
+        bernalLastNodes
+    );
+
+    try {
+        const response = await fetch(
+            BERNAL_WATCH_API,
+            {
+                method: "POST",
+                cache: "no-store",
+                headers: {
+                    "Content-Type":
+                        "application/x-www-form-urlencoded"
+                },
+                body:
+                    "armed=" +
+                    (enabled ? "1" : "0")
+            }
+        );
+
+        if (!response.ok)
+            throw new Error(
+                "HTTP " +
+                response.status
+            );
+
+        const data =
+            await response.json();
+
+        bernalWatchEnabled =
+            data.armed === true;
+
+        bernalWatchLoaded = true;
+    }
+    catch (error) {
+
+        console.error(
+            "Bernal Home watch save:",
+            error
+        );
+
+        alert(
+            "No se pudo guardar el modo vigilancia en el DCH"
+        );
+    }
+    finally {
+
+        bernalWatchBusy = false;
+
+        updateWatchPanel(
+            bernalLastNodes
+        );
+    }
+}
+
+
+function toggleWatchMode() {
+    if (!bernalWatchLoaded ||
+        bernalWatchBusy)
+        return;
+
+    setWatchMode(
+        !bernalWatchEnabled
+    );
+}
+
+
+document.addEventListener(
+    "DOMContentLoaded",
+    () => {
+
+        const button =
+            document.getElementById(
+                "watch-toggle"
+            );
+
+        if (button) {
+            button.addEventListener(
+                "click",
+                toggleWatchMode
+            );
+        }
+
+        updateWatchPanel(
+            bernalLastNodes
+        );
+
+        loadWatchMode();
+    }
 );
+
 
 updateState();
 setInterval(updateState, 1000);
