@@ -488,7 +488,19 @@ static int receive_frame(int fd,
 #define BERNAL_STATE_DIR  "/tmp/bernal-home"
 #define BERNAL_STATE_FILE "/tmp/bernal-home/state.json"
 #define BERNAL_STATE_TMP  "/tmp/bernal-home/state.json.tmp"
+
 #define BERNAL_HISTORY_FILE "/tmp/bernal-home/history.jsonl"
+#define BERNAL_HISTORY_TMP  "/tmp/bernal-home/history.jsonl.tmp"
+
+/*
+ * History lives in RAM during normal operation.
+ *
+ * Once it grows beyond 256 KiB, retain roughly the newest 128 KiB.
+ * Rotation never writes to flash; flash persistence is handled only
+ * by the OpenWrt init script during stop/reboot.
+ */
+#define BERNAL_HISTORY_MAX_BYTES  (256 * 1024)
+#define BERNAL_HISTORY_KEEP_BYTES (128 * 1024)
 
 static int ensure_state_directory(void)
 {
@@ -642,6 +654,99 @@ static int write_state_json(void)
     return 0;
 }
 
+static void rotate_history_if_needed(void)
+{
+    struct stat st;
+    FILE *src;
+    FILE *dst;
+    long start;
+    int ch;
+    char buf[4096];
+    size_t n;
+
+    if (stat(BERNAL_HISTORY_FILE, &st) != 0)
+        return;
+
+    if (st.st_size <= BERNAL_HISTORY_MAX_BYTES)
+        return;
+
+    src = fopen(BERNAL_HISTORY_FILE, "rb");
+
+    if (!src) {
+        perror("fopen history rotate source");
+        return;
+    }
+
+    start = (long)st.st_size - BERNAL_HISTORY_KEEP_BYTES;
+
+    if (start < 0)
+        start = 0;
+
+    if (fseek(src, start, SEEK_SET) != 0) {
+        perror("fseek history rotate");
+        fclose(src);
+        return;
+    }
+
+    /*
+     * If we started in the middle of a JSONL record, discard the
+     * partial record and begin copying after its newline.
+     */
+    if (start > 0) {
+        while ((ch = fgetc(src)) != EOF) {
+            if (ch == '\n')
+                break;
+        }
+    }
+
+    dst = fopen(BERNAL_HISTORY_TMP, "wb");
+
+    if (!dst) {
+        perror("fopen history rotate temp");
+        fclose(src);
+        return;
+    }
+
+    while ((n = fread(buf, 1, sizeof(buf), src)) > 0) {
+        if (fwrite(buf, 1, n, dst) != n) {
+            perror("fwrite history rotate");
+            fclose(src);
+            fclose(dst);
+            unlink(BERNAL_HISTORY_TMP);
+            return;
+        }
+    }
+
+    if (ferror(src)) {
+        perror("fread history rotate");
+        fclose(src);
+        fclose(dst);
+        unlink(BERNAL_HISTORY_TMP);
+        return;
+    }
+
+    fclose(src);
+
+    if (fclose(dst) != 0) {
+        perror("fclose history rotate temp");
+        unlink(BERNAL_HISTORY_TMP);
+        return;
+    }
+
+    if (rename(BERNAL_HISTORY_TMP,
+               BERNAL_HISTORY_FILE) != 0) {
+        perror("rename history rotate");
+        unlink(BERNAL_HISTORY_TMP);
+        return;
+    }
+
+    fprintf(stderr,
+            "[i] Bernal Home history rotated: "
+            "kept newest ~%d KiB\n",
+            BERNAL_HISTORY_KEEP_BYTES / 1024);
+}
+
+
 static void append_history_event(uint8_t node_id,
                                  int contact_open)
 {
@@ -702,7 +807,12 @@ static void append_history_event(uint8_t node_id,
             name,
             contact_open ? "open" : "closed");
 
-    fclose(fp);
+    if (fclose(fp) != 0) {
+        perror("fclose history.jsonl");
+        return;
+    }
+
+    rotate_history_if_needed();
 }
 
 static void print_contact_state(uint8_t node_id,
