@@ -427,6 +427,76 @@ main {
     text-align: center;
 }
 
+
+/* ==========================================================
+ * BERNAL HOME - ALARMA
+ * ========================================================== */
+
+.alarm-panel {
+    display: none;
+    background: #7f1d1d;
+    border: 2px solid #fb7185;
+    border-radius: 20px;
+    padding: 20px;
+    margin-bottom: 16px;
+    text-align: center;
+    box-shadow:
+        0 8px 24px rgba(0,0,0,.25),
+        0 0 24px rgba(251,113,133,.18);
+}
+
+.alarm-panel-active {
+    display: block;
+    animation: alarmPulse 1.4s ease-in-out infinite;
+}
+
+.alarm-icon {
+    font-size: 46px;
+    line-height: 1;
+}
+
+.alarm-title {
+    margin-top: 10px;
+    font-size: 26px;
+    font-weight: 900;
+    letter-spacing: 1px;
+    color: #fff;
+}
+
+.alarm-door {
+    margin-top: 8px;
+    font-size: 20px;
+    font-weight: 800;
+    color: #fecdd3;
+}
+
+.alarm-detail {
+    margin-top: 6px;
+    font-size: 13px;
+    color: #fecaca;
+}
+
+.alarm-instruction {
+    margin-top: 12px;
+    font-size: 12px;
+    color: #fda4af;
+}
+
+@keyframes alarmPulse {
+    0%,
+    100% {
+        box-shadow:
+            0 8px 24px rgba(0,0,0,.25),
+            0 0 16px rgba(251,113,133,.16);
+    }
+
+    50% {
+        box-shadow:
+            0 8px 24px rgba(0,0,0,.25),
+            0 0 34px rgba(251,113,133,.42);
+    }
+}
+
 </style>
 </head>
 
@@ -459,6 +529,36 @@ main {
 </div>
 
 
+<div
+    id="alarm-panel"
+    class="alarm-panel"
+    role="alert">
+
+    <div class="alarm-icon">
+        🚨
+    </div>
+
+    <div class="alarm-title">
+        ALARMA
+    </div>
+
+    <div
+        id="alarm-door"
+        class="alarm-door">
+        Acceso detectado
+    </div>
+
+    <div
+        id="alarm-detail"
+        class="alarm-detail">
+        Apertura detectada
+    </div>
+
+    <div class="alarm-instruction">
+        Desactiva el modo vigilancia para reconocer la alarma
+    </div>
+
+</div>
 
 
 <div class="watch-panel">
@@ -1442,6 +1542,35 @@ async function loadWatchMode() {
 
         bernalWatchLoaded = true;
 
+        /*
+         * Al desarmar, ocultamos inmediatamente
+         * la alarma enclavada en el frontend.
+         *
+         * El daemon también limpiará alarm.json,
+         * pero no obligamos al usuario a esperar
+         * al siguiente ciclo del daemon.
+         */
+        if (!bernalWatchEnabled) {
+            updateAlarmPanel({
+                active: false
+            });
+
+            /*
+             * Volvemos a consultar el estado real
+             * un poco después para sincronizarnos
+             * con el daemon.
+             */
+            setTimeout(
+                updateAlarm,
+                1500
+            );
+
+            setTimeout(
+                updateAlarm,
+                6000
+            );
+        }
+
         updateWatchPanel(
             bernalLastNodes
         );
@@ -1565,8 +1694,126 @@ document.addEventListener(
 );
 
 
+
+const BERNAL_ALARM_URL =
+    "alarm.json";
+
+let bernalAlarmLastActive = false;
+
+
+function bernalAlarmFormatTime(value) {
+    const raw =
+        String(value || "").trim();
+
+    if (!raw)
+        return "hora desconocida";
+
+    const parts =
+        raw.split(" ");
+
+    if (parts.length >= 2)
+        return parts[1];
+
+    return raw;
+}
+
+
+function updateAlarmPanel(data) {
+    const panel =
+        document.getElementById(
+            "alarm-panel"
+        );
+
+    const door =
+        document.getElementById(
+            "alarm-door"
+        );
+
+    const detail =
+        document.getElementById(
+            "alarm-detail"
+        );
+
+    if (!panel || !door || !detail)
+        return;
+
+    const active =
+        data &&
+        data.active === true;
+
+    if (!active) {
+        panel.classList.remove(
+            "alarm-panel-active"
+        );
+
+        bernalAlarmLastActive = false;
+
+        return;
+    }
+
+    const name =
+        data.name ||
+        (
+            data.node !== undefined &&
+            data.node !== null
+                ? "Node " + data.node
+                : "Acceso protegido"
+        );
+
+    door.textContent =
+        name;
+
+    detail.textContent =
+        "Apertura detectada a las " +
+        bernalAlarmFormatTime(
+            data.time
+        );
+
+    panel.classList.add(
+        "alarm-panel-active"
+    );
+
+    bernalAlarmLastActive = true;
+}
+
+
+async function updateAlarm() {
+    try {
+        const response =
+            await fetch(
+                BERNAL_ALARM_URL +
+                "?t=" +
+                Date.now(),
+                {
+                    cache: "no-store"
+                }
+            );
+
+        if (!response.ok)
+            throw new Error(
+                "HTTP " +
+                response.status
+            );
+
+        const data =
+            await response.json();
+
+        updateAlarmPanel(data);
+    }
+    catch (error) {
+        console.error(
+            "Bernal Home alarm:",
+            error
+        );
+    }
+}
+
+
 updateState();
 setInterval(updateState, 1000);
+
+updateAlarm();
+setInterval(updateAlarm, 1000);
 
 let historyEvents = [];
 let historyControlsReady = false;
