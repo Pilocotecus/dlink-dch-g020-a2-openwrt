@@ -1138,37 +1138,44 @@ function updateNode(nodeId, state) {
     }
 
     if (!state.battery_known) {
-        battery.textContent = "⚪ Sin lectura";
-    }
-    else if (state.battery_percent !== null &&
-             state.battery_percent !== undefined) {
+    battery.textContent = "⚪ Sin lectura";
+}
+else if (
+    state.battery_percent !== null &&
+    state.battery_percent !== undefined &&
+    state.battery_percent >= 0
+) {
+    const reported = Number(state.battery_percent);
 
-        const percent =
-            Number(state.battery_percent);
-
-        if (percent <= 10) {
-            battery.textContent =
-                "🪫 " + percent + "% · CRÍTICA";
-        }
-        else if (percent <= 25) {
-            battery.textContent =
-                "🪫 " + percent + "% · BAJA";
-        }
-        else if (percent <= 50) {
-            battery.textContent =
-                "🔋 " + percent + "% · MEDIA";
-        }
-        else {
-            battery.textContent =
-                "🔋 " + percent + "%";
-        }
+    if (reported === 0) {
+        battery.textContent = "🪫 0% reportado";
     }
-    else if (state.battery_low) {
-        battery.textContent = "🪫 BATERÍA BAJA";
+    else if (reported <= 10) {
+        battery.textContent =
+            "🪫 " + reported + "% reportado · CRÍTICA";
+    }
+    else if (reported <= 25) {
+        battery.textContent =
+            "🪫 " + reported + "% reportado · BAJA";
+    }
+    else if (reported <= 50) {
+        battery.textContent =
+            "🔋 " + reported + "% reportado · MEDIA";
+    }
+    else if (reported === 100) {
+        battery.textContent = "🔋 OK · 100% reportado";
     }
     else {
-        battery.textContent = "⚪ Sin calibrar";
+        battery.textContent =
+            "🔋 " + reported + "% reportado";
     }
+}
+else if (state.battery_low) {
+    battery.textContent = "🪫 BATERÍA BAJA";
+}
+else {
+    battery.textContent = "⚪ Sin calibrar";
+}
 
     luminance.textContent =
         state.luminance_percent === null ||
