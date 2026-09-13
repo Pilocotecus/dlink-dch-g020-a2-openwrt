@@ -8,6 +8,7 @@ from pywebpush import webpush, WebPushException
 
 
 STATE_URL = "https://192.168.1.4/bernal-home/state.json"
+ALARM_URL = "https://192.168.1.4/bernal-home/alarm.json"
 
 BASE = Path("/opt/bernal-home-server")
 SUBSCRIPTIONS_FILE = BASE / "subscriptions.json"
@@ -34,6 +35,9 @@ door_state = {
     }
     for node in DOORS
 }
+
+
+alarm_last_active = False
 
 
 def now_text():
@@ -214,6 +218,44 @@ def read_state():
     return response.json()
 
 
+
+def read_alarm():
+    response = requests.get(
+        ALARM_URL,
+        timeout=5,
+        verify="/etc/ssl/certs/ca-certificates.crt"
+    )
+
+    response.raise_for_status()
+    return response.json()
+
+
+def process_alarm(data):
+    global alarm_last_active
+
+    active = (
+        isinstance(data, dict)
+        and data.get("active") is True
+    )
+
+    if active and not alarm_last_active:
+        name = data.get("name") or "Acceso protegido"
+        event_time = data.get("time") or "hora desconocida"
+
+        send_push(
+            "🚨 Bernal Home · ALARMA",
+            f"{name} · apertura detectada a las {event_time}"
+        )
+
+        print(
+            f"[BA MONITOR] ALARMA PUSH: "
+            f"{name} @ {event_time}",
+            flush=True
+        )
+
+    alarm_last_active = active
+
+
 def main():
     print(
         "[BA MONITOR] Bernal Home Monitor iniciado",
@@ -233,6 +275,9 @@ def main():
                     node,
                     state.get("contact")
                 )
+
+            alarm = read_alarm()
+            process_alarm(alarm)
 
             if last_error is not None:
                 print(
