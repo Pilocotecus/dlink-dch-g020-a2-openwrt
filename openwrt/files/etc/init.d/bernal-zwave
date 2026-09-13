@@ -15,6 +15,15 @@ PERSIST_HISTORY="$PERSIST_DIR/history.jsonl"
 start_service() {
     mkdir -p "$STATE_DIR"
 
+    # Publicar la alarma RAM dentro del frontend web.
+    # El daemon crea/actualiza:
+    #   /tmp/bernal-home/alarm.json
+    #
+    # El navegador la lee como:
+    #   /bernal-home/alarm.json
+    mkdir -p /www/bernal-home
+    ln -sf "$STATE_DIR/alarm.json" /www/bernal-home/alarm.json
+
     # Restaurar último estado tras reboot completo
     if [ ! -f "$STATE_FILE" ] && [ -f "$PERSIST_STATE" ]; then
         cp "$PERSIST_STATE" "$STATE_FILE"
