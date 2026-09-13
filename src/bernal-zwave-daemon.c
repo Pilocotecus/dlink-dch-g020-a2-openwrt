@@ -492,6 +492,13 @@ static int receive_frame(int fd,
 #define BERNAL_HISTORY_FILE "/tmp/bernal-home/history.jsonl"
 #define BERNAL_HISTORY_TMP  "/tmp/bernal-home/history.jsonl.tmp"
 
+#define BERNAL_WATCH_FILE "/etc/bernal-home/watch.state"
+
+#define BERNAL_ALARM_FILE "/tmp/bernal-home/alarm.json"
+#define BERNAL_ALARM_TMP  "/tmp/bernal-home/alarm.json.tmp"
+
+static int bernal_alarm_active = 0;
+
 /*
  * History lives in RAM during normal operation.
  *
@@ -747,6 +754,197 @@ static void rotate_history_if_needed(void)
 }
 
 
+
+static int watch_is_armed(void)
+{
+    FILE *fp;
+    char buf[32];
+
+    fp = fopen(BERNAL_WATCH_FILE, "r");
+
+    if (!fp)
+        return 0;
+
+    if (!fgets(buf, sizeof(buf), fp)) {
+        fclose(fp);
+        return 0;
+    }
+
+    fclose(fp);
+
+    return (
+        buf[0] == '1' ||
+        strncmp(buf, "true", 4) == 0 ||
+        strncmp(buf, "armed", 5) == 0
+    );
+}
+
+
+static int watch_node_is_protected(uint8_t node_id)
+{
+    return (
+        node_id == 3 ||
+        node_id == 4 ||
+        node_id == 7
+    );
+}
+
+
+static const char *watch_node_name(uint8_t node_id)
+{
+    switch (node_id) {
+    case 3:
+        return "Puerta pérgola";
+
+    case 4:
+        return "Puerta principal";
+
+    case 7:
+        return "Puerta trasera";
+
+    default:
+        return "Sensor Z-Wave";
+    }
+}
+
+
+static int write_alarm_json(int active,
+                            uint8_t node_id,
+                            const char *name,
+                            const char *time_text)
+{
+    FILE *fp;
+
+    if (ensure_state_directory() < 0)
+        return -1;
+
+    fp = fopen(BERNAL_ALARM_TMP, "w");
+
+    if (!fp) {
+        perror("fopen alarm.json.tmp");
+        return -1;
+    }
+
+    fprintf(fp, "{\n");
+    fprintf(fp,
+            "  \"active\": %s,\n",
+            active ? "true" : "false");
+
+    if (active) {
+        fprintf(fp,
+                "  \"armed\": true,\n");
+
+        fprintf(fp,
+                "  \"node\": %u,\n",
+                (unsigned int)node_id);
+
+        fprintf(fp,
+                "  \"name\": \"%s\",\n",
+                name ? name : "");
+
+        fprintf(fp,
+                "  \"time\": \"%s\"\n",
+                time_text ? time_text : "");
+    }
+    else {
+        fprintf(fp,
+                "  \"armed\": false,\n");
+
+        fprintf(fp,
+                "  \"node\": null,\n");
+
+        fprintf(fp,
+                "  \"name\": null,\n");
+
+        fprintf(fp,
+                "  \"time\": null\n");
+    }
+
+    fprintf(fp, "}\n");
+
+    if (fclose(fp) != 0) {
+        perror("fclose alarm.json.tmp");
+        unlink(BERNAL_ALARM_TMP);
+        return -1;
+    }
+
+    if (rename(BERNAL_ALARM_TMP,
+               BERNAL_ALARM_FILE) != 0) {
+
+        perror("rename alarm.json");
+        unlink(BERNAL_ALARM_TMP);
+        return -1;
+    }
+
+    bernal_alarm_active = active;
+
+    return 0;
+}
+
+
+static void clear_alarm_if_disarmed(void)
+{
+    if (!bernal_alarm_active)
+        return;
+
+    if (watch_is_armed())
+        return;
+
+    if (write_alarm_json(
+            0,
+            0,
+            NULL,
+            NULL) == 0) {
+
+        fprintf(stderr,
+                "[WATCH] Alarm cleared: system disarmed\n");
+    }
+}
+
+
+static void trigger_watch_alarm(uint8_t node_id)
+{
+    char ts[32];
+    const char *name;
+
+    if (!watch_node_is_protected(node_id))
+        return;
+
+    if (!watch_is_armed())
+        return;
+
+    /*
+     * Alarm is latched.
+     *
+     * Once triggered, closing the door does not clear it.
+     * The user must disarm Bernal Home.
+     */
+    if (bernal_alarm_active)
+        return;
+
+    timestamp(ts, sizeof(ts));
+
+    name = watch_node_name(node_id);
+
+    if (write_alarm_json(
+            1,
+            node_id,
+            name,
+            ts) < 0) {
+
+        fprintf(stderr,
+                "[!] Could not publish Bernal Home alarm\n");
+
+        return;
+    }
+
+    fprintf(stderr,
+            "[ALARM] %s / Node%u opened while ARMED\n",
+            name,
+            (unsigned int)node_id);
+}
+
+
 static void append_history_event(uint8_t node_id,
                                  int contact_open)
 {
@@ -872,8 +1070,10 @@ static void decode_embedded(uint8_t node_id,
 
         if (cmd[7] == 0x16) {
             if (!state->contact_known ||
-                !state->contact_open)
+                !state->contact_open) {
                 append_history_event(node_id, 1);
+                trigger_watch_alarm(node_id);
+            }
 
             state->contact_known = 1;
             state->contact_open = 1;
@@ -1112,6 +1312,14 @@ int main(int argc, char **argv)
         fprintf(stderr,
                 "[!] Initial Bernal Home state unavailable\n");
 
+    if (write_alarm_json(
+            0,
+            0,
+            NULL,
+            NULL) < 0)
+        fprintf(stderr,
+                "[!] Initial Bernal Home alarm state unavailable\n");
+
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
 
@@ -1148,6 +1356,9 @@ int main(int argc, char **argv)
             if (write_state_json() < 0)
                 fprintf(stderr,
                         "[!] Periodic state refresh failed\n");
+
+            clear_alarm_if_disarmed();
+
             continue;
         }
 
@@ -1159,6 +1370,8 @@ int main(int argc, char **argv)
         }
 
         decode_application_command(frame, frame_len);
+
+        clear_alarm_if_disarmed();
     }
 
     print_summary();
