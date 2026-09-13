@@ -497,6 +497,250 @@ main {
     }
 }
 
+
+/* =========================================================
+   Bernal Home - vista panorámica
+   ========================================================= */
+
+.bernal-wide-layout {
+    display: block;
+}
+
+.bernal-main-column,
+.bernal-history-column {
+    min-width: 0;
+}
+
+.bernal-history-column {
+    margin-top: 18px;
+}
+
+@media (min-width: 1180px) {
+
+    main {
+        max-width: 1600px;
+        margin-left: auto;
+        margin-right: auto;
+    }
+
+    .bernal-wide-layout {
+        display: grid;
+        grid-template-columns:
+            minmax(0, 1.35fr)
+            minmax(390px, 0.85fr);
+
+        gap: 24px;
+        align-items: start;
+    }
+
+    .bernal-history-column {
+        margin-top: 0;
+        position: sticky;
+        top: 16px;
+
+        max-height: calc(100vh - 32px);
+        overflow-y: auto;
+        overflow-x: hidden;
+    }
+
+    .bernal-history-column .history-card {
+        margin-top: 0;
+    }
+}
+
+@media (min-width: 1500px) {
+
+    .bernal-wide-layout {
+        grid-template-columns:
+            minmax(0, 1.45fr)
+            minmax(430px, 0.75fr);
+
+        gap: 30px;
+    }
+}
+
+
+/* Bernal Home - panorama v2 */
+
+@media (min-width: 1180px) {
+
+    main {
+        width: calc(100% - 40px) !important;
+        max-width: 1500px !important;
+        margin-left: auto !important;
+        margin-right: auto !important;
+    }
+
+    .bernal-wide-layout {
+        display: grid !important;
+
+        /*
+         * Vivienda / sensores   66 %
+         * Historial             34 %
+         */
+        grid-template-columns:
+            minmax(650px, 1.9fr)
+            minmax(390px, 1fr) !important;
+
+        gap: 24px !important;
+        align-items: start !important;
+    }
+
+    .bernal-main-column {
+        min-width: 0 !important;
+        width: 100% !important;
+    }
+
+    .bernal-history-column {
+        min-width: 390px !important;
+        width: 100% !important;
+
+        position: sticky !important;
+        top: 16px !important;
+
+        max-height: calc(100vh - 32px) !important;
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+    }
+
+    .bernal-history-column .history-card {
+        width: 100% !important;
+        box-sizing: border-box !important;
+    }
+}
+
+
+/*
+ * En monitores grandes abrimos todavía más
+ * la zona principal.
+ */
+@media (min-width: 1450px) {
+
+    main {
+        max-width: 1700px !important;
+    }
+
+    .bernal-wide-layout {
+        grid-template-columns:
+            minmax(760px, 2fr)
+            minmax(420px, 1fr) !important;
+
+        gap: 28px !important;
+    }
+}
+
+
+/*
+ * En portátil estrecho evitamos repetir
+ * el efecto de columna izquierda aplastada.
+ */
+@media (min-width: 1180px) and (max-width: 1300px) {
+
+    .bernal-wide-layout {
+        grid-template-columns:
+            minmax(620px, 1.65fr)
+            minmax(360px, 1fr) !important;
+
+        gap: 18px !important;
+    }
+}
+
+
+/* Bernal Home - sensor grid v1 */
+
+.sensor-section-title {
+    margin-top: 6px;
+    margin-bottom: 2px;
+    font-size: 22px;
+    font-weight: 800;
+}
+
+
+/*
+ * Escritorio panorámico:
+ * la columna principal se convierte en grid.
+ */
+@media (min-width: 1180px) {
+
+    .bernal-main-column {
+        display: grid !important;
+
+        grid-template-columns:
+            repeat(2, minmax(0, 1fr));
+
+        gap: 16px !important;
+        align-items: start !important;
+    }
+
+    /*
+     * Por defecto, todo lo que NO sean sensores
+     * ocupa las dos columnas completas.
+     */
+    .bernal-main-column > * {
+        grid-column: 1 / -1;
+    }
+
+    /*
+     * Las tarjetas de sensores sí ocupan
+     * una celda individual.
+     */
+    .bernal-main-column > .card[data-node] {
+        grid-column: auto !important;
+
+        width: auto !important;
+        max-width: none !important;
+
+        margin-top: 0 !important;
+        margin-bottom: 0 !important;
+
+        box-sizing: border-box !important;
+    }
+
+    .sensor-section-title {
+        grid-column: 1 / -1 !important;
+    }
+}
+
+
+/*
+ * Pantalla suficientemente ancha:
+ * 3 sensores por fila.
+ */
+@media (min-width: 1450px) {
+
+    .bernal-main-column {
+        grid-template-columns:
+            repeat(3, minmax(0, 1fr));
+    }
+
+    .bernal-main-column > * {
+        grid-column: 1 / -1;
+    }
+
+    .bernal-main-column > .card[data-node] {
+        grid-column: auto !important;
+    }
+}
+
+
+/*
+ * Dentro de una tarjeta compactamos la información
+ * para que los cuatro valores entren cómodamente.
+ */
+@media (min-width: 1180px) {
+
+    .bernal-main-column > .card[data-node] .grid {
+        grid-template-columns:
+            repeat(2, minmax(0, 1fr)) !important;
+
+        gap: 10px !important;
+    }
+
+    .bernal-main-column > .card[data-node] .device-title {
+        line-height: 1.25;
+    }
+}
+
 </style>
 </head>
 
@@ -508,6 +752,8 @@ main {
 </header>
 
 <main>
+<div class="bernal-wide-layout">
+    <div class="bernal-main-column">
 
 <div id="error">
     No se puede leer el estado del controlador.
@@ -596,6 +842,10 @@ main {
 
 </div>
 
+
+<div class="sensor-section-title">
+    Sensores (Nodes 3–11)
+</div>
 
 <div class="card" data-node="3">
 
@@ -1014,6 +1264,9 @@ main {
     </div>
 </div>
 
+    </div>
+
+    <aside class="bernal-history-column">
 <div class="history-card">
         <div class="history-title">Actividad reciente</div>
 
@@ -1072,6 +1325,8 @@ main {
         </div>
     </div>
 
+    </aside>
+</div>
 </main>
 
 <script>
