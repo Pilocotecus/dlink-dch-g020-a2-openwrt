@@ -567,11 +567,11 @@ main {
 
         <div>
             <div class="watch-title">
-                🛡️ Modo vigilancia
+                🏠 Vigilancia de toda la vivienda
             </div>
 
             <div class="watch-subtitle">
-                Control de accesos principales
+                Protección de todos los sensores instalados
             </div>
         </div>
 
@@ -591,7 +591,7 @@ main {
     </div>
 
     <div class="watch-nodes">
-        Puerta pérgola · Puerta principal · Puerta trasera
+        Sensores protegidos: Puerta pérgola · Puerta principal · Despacho · Habitación Laura · Puerta trasera · Pérgola 2 · Vestidor · Sala tele · Habitación matrimonio
     </div>
 
 </div>
@@ -1138,18 +1138,36 @@ function updateNode(nodeId, state) {
     }
 
     if (!state.battery_known) {
-        battery.textContent = "—";
-    }
-    else if (state.battery_low) {
-        battery.textContent = "⚠ Baja";
+        battery.textContent = "⚪ Sin lectura";
     }
     else if (state.battery_percent !== null &&
              state.battery_percent !== undefined) {
-        battery.textContent =
-            state.battery_percent + "%";
+
+        const percent =
+            Number(state.battery_percent);
+
+        if (percent <= 10) {
+            battery.textContent =
+                "🪫 " + percent + "% · CRÍTICA";
+        }
+        else if (percent <= 25) {
+            battery.textContent =
+                "🪫 " + percent + "% · BAJA";
+        }
+        else if (percent <= 50) {
+            battery.textContent =
+                "🔋 " + percent + "% · MEDIA";
+        }
+        else {
+            battery.textContent =
+                "🔋 " + percent + "%";
+        }
+    }
+    else if (state.battery_low) {
+        battery.textContent = "🪫 BATERÍA BAJA";
     }
     else {
-        battery.textContent = "No calibrada";
+        battery.textContent = "⚪ Sin calibrar";
     }
 
     luminance.textContent =
@@ -1330,7 +1348,10 @@ async function updateState() {
 }
 
 
-const BERNAL_WATCH_NODES = ["3", "4", "7"];
+const BERNAL_WATCH_NODES = [
+    "3", "4", "5", "6", "7",
+    "8", "9", "10", "11"
+];
 
 const BERNAL_WATCH_API =
     "/cgi-bin/bernal-watch";
@@ -1917,7 +1938,10 @@ function filteredHistoryEvents() {
             return false;
 
         if (state &&
-            event.state !== state)
+            (
+                event.type === "security" ||
+                event.state !== state
+            ))
             return false;
 
         if (search) {
@@ -1927,7 +1951,23 @@ function filteredHistoryEvents() {
                     ("Node " + event.node)
                 ).toLowerCase();
 
-            if (!name.includes(search))
+            const securityText =
+                event.type === "security"
+                    ? (
+                        event.state === "armed"
+                            ? "vigilancia activada armado armed"
+                            : event.state === "disarmed"
+                                ? "vigilancia desactivada desarmado disarmed"
+                                : event.state === "alarm"
+                                    ? "alarma alarm"
+                                    : "seguridad security"
+                    )
+                    : "";
+
+            if (
+                !name.includes(search) &&
+                !securityText.includes(search)
+            )
                 return false;
         }
 
@@ -2054,6 +2094,7 @@ function renderHistorySummary() {
     const events =
         [...historyEvents]
             .filter(event =>
+                event.type !== "security" &&
                 String(event.time || "")
                     .slice(0, 10) === today
             )
@@ -2318,7 +2359,13 @@ function renderHistory() {
         row.className = "history-event";
 
         const night =
-            event.state === "open" &&
+            (
+                event.state === "open" ||
+                (
+                    event.type === "security" &&
+                    event.state === "alarm"
+                )
+            ) &&
             historyIsNight(event.time);
 
         if (night)
@@ -2353,28 +2400,76 @@ function renderHistory() {
             document.createElement("div");
 
         name.className = "history-name";
-        name.textContent =
-            event.name ||
-            ("Node " + event.node);
 
         const state =
             document.createElement("div");
 
         state.className = "history-state";
 
-        if (event.state === "open") {
+        if (event.type === "security") {
 
-            state.textContent = "ABIERTA";
-            state.classList.add(
-                "history-open"
-            );
+            if (event.state === "armed") {
+
+                name.textContent =
+                    "🛡️ Vigilancia activada";
+
+                state.textContent = "ARMADA";
+                state.classList.add(
+                    "history-closed"
+                );
+
+            } else if (event.state === "disarmed") {
+
+                name.textContent =
+                    "🔓 Vigilancia desactivada";
+
+                state.textContent = "DESARMADA";
+
+            } else if (event.state === "alarm") {
+
+                name.textContent =
+                    "🚨 Alarma · " +
+                    (
+                        event.name ||
+                        ("Node " + event.node)
+                    );
+
+                state.textContent = "ALARMA";
+                state.classList.add(
+                    "history-open"
+                );
+
+            } else {
+
+                name.textContent =
+                    "🛡️ Evento de seguridad";
+
+                state.textContent =
+                    String(
+                        event.state || "SEGURIDAD"
+                    ).toUpperCase();
+            }
 
         } else {
 
-            state.textContent = "CERRADA";
-            state.classList.add(
-                "history-closed"
-            );
+            name.textContent =
+                event.name ||
+                ("Node " + event.node);
+
+            if (event.state === "open") {
+
+                state.textContent = "ABIERTA";
+                state.classList.add(
+                    "history-open"
+                );
+
+            } else {
+
+                state.textContent = "CERRADA";
+                state.classList.add(
+                    "history-closed"
+                );
+            }
         }
 
         if (night) {

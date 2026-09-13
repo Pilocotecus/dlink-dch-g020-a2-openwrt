@@ -783,9 +783,8 @@ static int watch_is_armed(void)
 static int watch_node_is_protected(uint8_t node_id)
 {
     return (
-        node_id == 3 ||
-        node_id == 4 ||
-        node_id == 7
+        node_id >= 3 &&
+        node_id <= 11
     );
 }
 
@@ -799,8 +798,26 @@ static const char *watch_node_name(uint8_t node_id)
     case 4:
         return "Puerta principal";
 
+    case 5:
+        return "Despacho";
+
+    case 6:
+        return "Habitación Laura";
+
     case 7:
         return "Puerta trasera";
+
+    case 8:
+        return "Pérgola 2";
+
+    case 9:
+        return "Vestidor";
+
+    case 10:
+        return "Sala tele";
+
+    case 11:
+        return "Habitación matrimonio";
 
     default:
         return "Sensor Z-Wave";
@@ -902,6 +919,45 @@ static void clear_alarm_if_disarmed(void)
 }
 
 
+static void append_security_history_event(const char *state,
+                                          uint8_t node_id,
+                                          const char *name)
+{
+    FILE *fp;
+    char ts[32];
+
+    if (ensure_state_directory() < 0)
+        return;
+
+    timestamp(ts, sizeof(ts));
+
+    fp = fopen(BERNAL_HISTORY_FILE, "a");
+
+    if (!fp) {
+        perror("fopen history.jsonl security");
+        return;
+    }
+
+    fprintf(fp,
+            "{\"time\":\"%s\","
+            "\"type\":\"security\","
+            "\"state\":\"%s\","
+            "\"node\":%u,"
+            "\"name\":\"%s\"}\n",
+            ts,
+            state ? state : "",
+            (unsigned int)node_id,
+            name ? name : "");
+
+    if (fclose(fp) != 0) {
+        perror("fclose history.jsonl security");
+        return;
+    }
+
+    rotate_history_if_needed();
+}
+
+
 static void trigger_watch_alarm(uint8_t node_id)
 {
     char ts[32];
@@ -937,6 +993,12 @@ static void trigger_watch_alarm(uint8_t node_id)
 
         return;
     }
+
+    append_security_history_event(
+        "alarm",
+        node_id,
+        name
+    );
 
     fprintf(stderr,
             "[ALARM] %s / Node%u opened while ARMED\n",

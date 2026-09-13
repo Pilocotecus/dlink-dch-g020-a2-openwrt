@@ -3,6 +3,8 @@
 STATE_DIR="/etc/bernal-home"
 STATE_FILE="$STATE_DIR/watch.state"
 
+HISTORY_FILE="/tmp/bernal-home/history.jsonl"
+
 read_state() {
     if [ -f "$STATE_FILE" ]; then
         VALUE="$(cat "$STATE_FILE" 2>/dev/null)"
@@ -31,6 +33,16 @@ write_state() {
     mv "$TMP" "$STATE_FILE" || exit 1
 }
 
+append_security_event() {
+    EVENT="$1"
+
+    mkdir -p /tmp/bernal-home || return 0
+
+    NOW="$(date '+%Y-%m-%d %H:%M:%S')"
+
+    printf '{"time":"%s","type":"security","state":"%s","node":0,"name":"Bernal Home"}\n'         "$NOW"         "$EVENT"         >> "$HISTORY_FILE"
+}
+
 METHOD="${REQUEST_METHOD:-GET}"
 
 case "$METHOD" in
@@ -55,10 +67,21 @@ case "$METHOD" in
 
         case "$BODY" in
             *armed=1*|*armed=true*)
+                OLD_STATE="$(read_state)"
                 write_state 1
+
+                if [ "$OLD_STATE" != "1" ]; then
+                    append_security_event armed
+                fi
                 ;;
+
             *armed=0*|*armed=false*)
+                OLD_STATE="$(read_state)"
                 write_state 0
+
+                if [ "$OLD_STATE" != "0" ]; then
+                    append_security_event disarmed
+                fi
                 ;;
             *)
                 printf 'Status: 400 Bad Request\r\n'
