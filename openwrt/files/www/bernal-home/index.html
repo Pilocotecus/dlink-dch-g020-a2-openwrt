@@ -1282,6 +1282,9 @@ main {
                 <option value="">Todos los estados</option>
                 <option value="open">Abiertas</option>
                 <option value="closed">Cerradas</option>
+                <option value="alarm">Alarmas</option>
+                <option value="armed">Vigilancia armada</option>
+                <option value="disarmed">Vigilancia desarmada</option>
             </select>
 
             <input id="history-search"
@@ -2199,12 +2202,27 @@ function filteredHistoryEvents() {
             String(event.node) !== node)
             return false;
 
-        if (state &&
-            (
-                event.type === "security" ||
-                event.state !== state
-            ))
-            return false;
+        if (state) {
+            const securityState =
+                state === "alarm" ||
+                state === "armed" ||
+                state === "disarmed";
+
+            if (securityState) {
+                if (
+                    event.type !== "security" ||
+                    event.state !== state
+                )
+                    return false;
+            }
+            else {
+                if (
+                    event.type === "security" ||
+                    event.state !== state
+                )
+                    return false;
+            }
+        }
 
         if (search) {
             const name =
@@ -2341,178 +2359,364 @@ function renderHistorySummary() {
     if (!container)
         return;
 
+    const now = new Date();
     const today = historyTodayString();
 
+    const dayStart =
+        new Date(today + "T00:00:00");
+
     /*
-     * Estadísticas por sensor:
+     * Estadísticas reconstruidas desde TODO el histórico.
      *
-     * opens       -> número de aperturas hoy
-     * secondsOpen -> tiempo acumulado abierto
-     * openAt      -> apertura todavía pendiente de cierre
-     * isOpen      -> estado calculado del sensor
+     * Esto permite:
+     *  - no contar OPEN duplicados;
+     *  - conservar aperturas que comenzaron antes de medianoche;
+     *  - calcular correctamente duración acumulada de hoy;
+     *  - conocer máxima y última apertura.
      */
     const stats = new Map();
 
-    const events =
+    const sensorEvents =
         [...historyEvents]
             .filter(event =>
                 event.type !== "security" &&
-                String(event.time || "")
-                    .slice(0, 10) === today
+                (
+                    event.state === "open" ||
+                    event.state === "closed"
+                )
             )
-            .sort((a, b) => {
-                const ta =
-                    historyParseTime(a.time)?.getTime() || 0;
+            .map(event => ({
+                ...event,
+                parsedTime:
+                    historyParseTime(event.time)
+            }))
+            .filter(event =>
+                event.parsedTime &&
+                event.parsedTime <= now
+            )
+            .sort((a, b) =>
+                a.parsedTime.getTime() -
+                b.parsedTime.getTime()
+            );
 
-                const tb =
-                    historyParseTime(b.time)?.getTime() || 0;
+    function getStat(event) {
+        const key =
+            String(event.node ?? event.name ?? "unknown");
 
-                return ta - tb;
-            });
+        if (!stats.has(key)) {
+            stats.set(key, {
+                node: event.node,
+                name:
+                    event.name ||
+                    ("Node " + event.node),
 
-    events.forEach(event => {
-        const name =
-            event.name ||
-            ("Node " + event.node);
-
-        if (!stats.has(name)) {
-            stats.set(name, {
                 opens: 0,
                 secondsOpen: 0,
+                longestSeconds: 0,
+
+                isOpen: false,
                 openAt: null,
-                isOpen: false
+
+                lastOpen: null,
+                touchedToday: false
             });
         }
 
-        const stat =
-            stats.get(name);
+        const stat = stats.get(key);
 
-        const time =
-            historyParseTime(event.time);
+        if (event.name)
+            stat.name = event.name;
 
-        if (!time)
-            return;
+        return stat;
+    }
+
+    sensorEvents.forEach(event => {
+        const stat = getStat(event);
+        const time = event.parsedTime;
+
+        const eventIsToday =
+            String(event.time || "")
+                .slice(0, 10) === today;
 
         if (event.state === "open") {
 
-            stat.opens += 1;
-
             /*
-             * Evitamos sustituir una apertura pendiente
-             * si llegara algún evento OPEN duplicado.
+             * Solo contamos transición CLOSED -> OPEN.
+             * Un OPEN repetido no crea otra apertura.
              */
-            if (!stat.isOpen)
+            if (!stat.isOpen) {
+                stat.isOpen = true;
                 stat.openAt = time;
 
-            stat.isOpen = true;
-
-        } else if (event.state === "closed") {
-
-            if (stat.isOpen && stat.openAt) {
-                const elapsed =
-                    (
-                        time.getTime() -
-                        stat.openAt.getTime()
-                    ) / 1000;
-
-                if (elapsed >= 0)
-                    stat.secondsOpen += elapsed;
+                if (eventIsToday) {
+                    stat.opens += 1;
+                    stat.lastOpen = time;
+                    stat.touchedToday = true;
+                }
             }
 
-            stat.openAt = null;
+            return;
+        }
+
+        if (event.state === "closed") {
+
+            if (eventIsToday)
+                stat.touchedToday = true;
+
+            if (stat.isOpen && stat.openAt) {
+                const start =
+                    stat.openAt < dayStart
+                        ? dayStart
+                        : stat.openAt;
+
+                const end =
+                    time > now
+                        ? now
+                        : time;
+
+                if (end >= dayStart &&
+                    end >= start) {
+
+                    const seconds =
+                        (
+                            end.getTime() -
+                            start.getTime()
+                        ) / 1000;
+
+                    stat.secondsOpen += seconds;
+
+                    if (seconds >
+                        stat.longestSeconds) {
+                        stat.longestSeconds =
+                            seconds;
+                    }
+                }
+            }
+
             stat.isOpen = false;
+            stat.openAt = null;
         }
     });
 
     /*
-     * Si continúa abierto en este momento,
-     * añadimos el tiempo transcurrido hasta ahora.
+     * Aperturas todavía activas.
      */
-    const now = new Date();
-
     stats.forEach(stat => {
-        if (stat.isOpen && stat.openAt) {
-            const elapsed =
+        stat.currentSeconds = 0;
+
+        if (!stat.isOpen || !stat.openAt)
+            return;
+
+        const start =
+            stat.openAt < dayStart
+                ? dayStart
+                : stat.openAt;
+
+        const seconds =
+            Math.max(
+                0,
                 (
                     now.getTime() -
-                    stat.openAt.getTime()
-                ) / 1000;
+                    start.getTime()
+                ) / 1000
+            );
 
-            if (elapsed >= 0)
-                stat.currentSeconds =
-                    elapsed;
-            else
-                stat.currentSeconds = 0;
-        } else {
-            stat.currentSeconds = 0;
-        }
+        stat.currentSeconds = seconds;
+
+        if (seconds > stat.longestSeconds)
+            stat.longestSeconds = seconds;
+
+        stat.touchedToday = true;
     });
+
+    /*
+     * Eventos de seguridad de hoy.
+     */
+    const todaySecurityEvents =
+        historyEvents.filter(event =>
+            event.type === "security" &&
+            String(event.time || "")
+                .slice(0, 10) === today
+        );
+
+    const alarmCount =
+        todaySecurityEvents.filter(event =>
+            event.state === "alarm"
+        ).length;
+
+    const nightOpenings =
+        sensorEvents.filter(event =>
+            event.state === "open" &&
+            String(event.time || "")
+                .slice(0, 10) === today &&
+            historyIsNight(event.time)
+        ).filter((event, index, all) => {
+            /*
+             * El cálculo principal ya elimina OPEN duplicados
+             * por estado; aquí evitamos duplicados consecutivos
+             * simples para el KPI nocturno.
+             */
+            if (!index)
+                return true;
+
+            const previous = all[index - 1];
+
+            return !(
+                String(previous.node) ===
+                    String(event.node) &&
+                previous.state === "open"
+            );
+        }).length;
+
+    const activeStats =
+        Array.from(stats.values())
+            .filter(stat =>
+                stat.touchedToday ||
+                stat.opens > 0 ||
+                stat.secondsOpen > 0 ||
+                stat.currentSeconds > 0
+            );
+
+    const totalOpenings =
+        activeStats.reduce(
+            (total, stat) =>
+                total + stat.opens,
+            0
+        );
+
+    const totalSeconds =
+        activeStats.reduce(
+            (total, stat) =>
+                total +
+                stat.secondsOpen +
+                stat.currentSeconds,
+            0
+        );
+
+    const longestSeconds =
+        activeStats.reduce(
+            (max, stat) =>
+                Math.max(
+                    max,
+                    stat.longestSeconds
+                ),
+            0
+        );
 
     container.innerHTML = "";
 
-    const nightOpenings =
-        events.filter(event =>
-            event.state === "open" &&
-            historyIsNight(event.time)
-        ).length;
-
-    const nightItem =
-        document.createElement("div");
-
-    nightItem.className =
-        "history-summary-item history-night-summary";
-
-    const nightName =
-        document.createElement("div");
-
-    nightName.className =
-        "history-summary-name";
-
-    nightName.textContent =
-        "🌙 Actividad nocturna · " +
-        historyNightLabel();
-
-    const nightValue =
-        document.createElement("div");
-
-    nightValue.className =
-        "history-summary-value";
-
-    nightValue.textContent =
-        nightOpenings +
-        (nightOpenings === 1
-            ? " apertura"
-            : " aperturas");
-
-    nightItem.appendChild(nightName);
-    nightItem.appendChild(nightValue);
-
-    container.appendChild(nightItem);
-
-    if (!stats.size) {
+    function addSummaryItem(
+        label,
+        value,
+        className = ""
+    ) {
         const item =
             document.createElement("div");
 
         item.className =
-            "history-summary-item";
+            "history-summary-item" +
+            (className
+                ? " " + className
+                : "");
 
-        item.innerHTML =
-            '<div class="history-summary-name">' +
-            'Hoy' +
-            '</div>' +
-            '<div class="history-summary-value">' +
-            'Sin actividad' +
-            '</div>';
+        const nameElement =
+            document.createElement("div");
+
+        nameElement.className =
+            "history-summary-name";
+
+        nameElement.textContent =
+            label;
+
+        const valueElement =
+            document.createElement("div");
+
+        valueElement.className =
+            "history-summary-value";
+
+        valueElement.textContent =
+            value;
+
+        item.appendChild(nameElement);
+        item.appendChild(valueElement);
 
         container.appendChild(item);
+
+        return item;
+    }
+
+    /*
+     * KPIs generales.
+     */
+    addSummaryItem(
+        "🚪 Aperturas hoy",
+        String(totalOpenings)
+    );
+
+    addSummaryItem(
+        "⏱️ Tiempo abierto",
+        historyFormatDuration(
+            totalSeconds
+        )
+    );
+
+    addSummaryItem(
+        "🏆 Apertura más larga",
+        historyFormatDuration(
+            longestSeconds
+        )
+    );
+
+    addSummaryItem(
+        "🚨 Alarmas hoy",
+        String(alarmCount),
+        alarmCount
+            ? "history-night-summary"
+            : ""
+    );
+
+    addSummaryItem(
+        "🌙 Actividad nocturna · " +
+            historyNightLabel(),
+        nightOpenings +
+            (
+                nightOpenings === 1
+                    ? " apertura"
+                    : " aperturas"
+            ),
+        "history-night-summary"
+    );
+
+    if (!activeStats.length) {
+        addSummaryItem(
+            "Hoy",
+            "Sin actividad"
+        );
         return;
     }
 
-    Array.from(stats.entries())
-        .sort((a, b) =>
-            a[0].localeCompare(b[0])
-        )
-        .forEach(([name, stat]) => {
+    /*
+     * Detalle por sensor.
+     */
+    activeStats
+        .sort((a, b) => {
+            const na =
+                Number(a.node);
+
+            const nb =
+                Number(b.node);
+
+            if (
+                Number.isFinite(na) &&
+                Number.isFinite(nb)
+            )
+                return na - nb;
+
+            return a.name.localeCompare(
+                b.name
+            );
+        })
+        .forEach(stat => {
 
             const item =
                 document.createElement("div");
@@ -2526,7 +2730,8 @@ function renderHistorySummary() {
             label.className =
                 "history-summary-name";
 
-            label.textContent = name;
+            label.textContent =
+                stat.name;
 
             const value =
                 document.createElement("div");
@@ -2536,9 +2741,15 @@ function renderHistorySummary() {
 
             value.textContent =
                 stat.opens +
-                (stat.opens === 1
-                    ? " apertura"
-                    : " aperturas");
+                (
+                    stat.opens === 1
+                        ? " apertura"
+                        : " aperturas"
+                );
+
+            const total =
+                stat.secondsOpen +
+                stat.currentSeconds;
 
             const detail =
                 document.createElement("div");
@@ -2546,29 +2757,71 @@ function renderHistorySummary() {
             detail.className =
                 "history-summary-name";
 
-            detail.style.marginTop = "6px";
+            detail.style.marginTop =
+                "6px";
 
-            const totalSeconds =
-                stat.secondsOpen +
-                stat.currentSeconds;
+            detail.textContent =
+                stat.isOpen
+                    ? (
+                        "🔴 ABIERTA · " +
+                        historyFormatDuration(
+                            total
+                        )
+                    )
+                    : (
+                        "Tiempo abierta: " +
+                        historyFormatDuration(
+                            total
+                        )
+                    );
 
-            if (stat.isOpen) {
-                detail.textContent =
-                    "🔴 ABIERTA · " +
-                    historyFormatDuration(
-                        totalSeconds
-                    );
-            } else {
-                detail.textContent =
-                    "Tiempo abierta: " +
-                    historyFormatDuration(
-                        totalSeconds
-                    );
+            const longest =
+                document.createElement("div");
+
+            longest.className =
+                "history-summary-name";
+
+            longest.style.marginTop =
+                "4px";
+
+            longest.textContent =
+                "Máxima: " +
+                historyFormatDuration(
+                    stat.longestSeconds
+                );
+
+            const last =
+                document.createElement("div");
+
+            last.className =
+                "history-summary-name";
+
+            last.style.marginTop =
+                "4px";
+
+            if (stat.lastOpen) {
+                last.textContent =
+                    "Última apertura: " +
+                    String(
+                        stat.lastOpen
+                            .getHours()
+                    ).padStart(2, "0") +
+                    ":" +
+                    String(
+                        stat.lastOpen
+                            .getMinutes()
+                    ).padStart(2, "0");
+            }
+            else {
+                last.textContent =
+                    "Última apertura: —";
             }
 
             item.appendChild(label);
             item.appendChild(value);
             item.appendChild(detail);
+            item.appendChild(longest);
+            item.appendChild(last);
 
             container.appendChild(item);
         });
