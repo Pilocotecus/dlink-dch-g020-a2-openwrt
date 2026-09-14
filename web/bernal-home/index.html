@@ -1356,6 +1356,9 @@ function updateNode(nodeId, state) {
 
     contact.className = "contact-state";
 
+    /*
+     * Nodo completamente desconocido.
+     */
     if (!state) {
         contact.textContent = "DESCONOCIDO";
         contact.classList.add("unknown");
@@ -1373,7 +1376,37 @@ function updateNode(nodeId, state) {
         return;
     }
 
-    if (state.contact === "open") {
+    const isOnline =
+        state.online === true;
+
+    const hasLastSeen =
+        state.last_seen &&
+        state.last_seen !== "never";
+
+    /*
+     * ESTADO DE CONTACTO
+     *
+     * Si el nodo está offline no presentamos OPEN/CLOSED
+     * como si fuese un estado actual.
+     */
+    if (!isOnline) {
+
+        if (state.contact === "open") {
+            contact.textContent =
+                "SIN COMUNICACIÓN · última: ABIERTA";
+        }
+        else if (state.contact === "closed") {
+            contact.textContent =
+                "SIN COMUNICACIÓN · última: CERRADA";
+        }
+        else {
+            contact.textContent =
+                "SIN COMUNICACIÓN";
+        }
+
+        contact.classList.add("unknown");
+    }
+    else if (state.contact === "open") {
         contact.textContent = "ABIERTA";
         contact.classList.add("open");
     }
@@ -1386,79 +1419,150 @@ function updateNode(nodeId, state) {
         contact.classList.add("unknown");
     }
 
-    if (state.online) {
+    /*
+     * CONECTIVIDAD
+     */
+    if (isOnline) {
         online.innerHTML =
             '<span class="status status-online"></span>En línea';
     }
     else {
         online.innerHTML =
-            '<span class="status status-offline"></span>Sin datos';
+            '<span class="status status-offline"></span>Fuera de línea';
     }
+
+    /*
+     * BATERÍA
+     *
+     * El Z110 informa valores explícitos.
+     * Cuando está offline, cualquier valor conservado se etiqueta
+     * claramente como última lectura, nunca como valor actual.
+     */
+    let batteryText = "";
 
     if (!state.battery_known) {
-    battery.textContent = "⚪ Sin lectura";
-}
-else if (
-    state.battery_percent !== null &&
-    state.battery_percent !== undefined &&
-    state.battery_percent >= 0
-) {
-    const reported = Number(state.battery_percent);
+        batteryText = "⚪ Sin lectura";
+    }
+    else if (
+        state.battery_percent !== null &&
+        state.battery_percent !== undefined &&
+        state.battery_percent >= 0
+    ) {
+        const reported =
+            Number(state.battery_percent);
 
-    if (reported === 0) {
-        battery.textContent = "🪫 0% reportado";
+        if (reported === 0) {
+            batteryText =
+                "🪫 0% reportado";
+        }
+        else if (reported <= 10) {
+            batteryText =
+                "🪫 " + reported +
+                "% reportado · CRÍTICA";
+        }
+        else if (reported <= 25) {
+            batteryText =
+                "🪫 " + reported +
+                "% reportado · BAJA";
+        }
+        else if (reported <= 50) {
+            batteryText =
+                "🔋 " + reported +
+                "% reportado · MEDIA";
+        }
+        else if (reported === 100) {
+            batteryText =
+                "🔋 OK · 100% reportado";
+        }
+        else {
+            batteryText =
+                "🔋 " + reported +
+                "% reportado";
+        }
     }
-    else if (reported <= 10) {
+    else if (state.battery_low) {
+        batteryText =
+            "🪫 BATERÍA BAJA";
+    }
+    else {
+        batteryText =
+            "⚪ Sin calibrar";
+    }
+
+    if (!isOnline &&
+        state.battery_known) {
         battery.textContent =
-            "🪫 " + reported + "% reportado · CRÍTICA";
-    }
-    else if (reported <= 25) {
-        battery.textContent =
-            "🪫 " + reported + "% reportado · BAJA";
-    }
-    else if (reported <= 50) {
-        battery.textContent =
-            "🔋 " + reported + "% reportado · MEDIA";
-    }
-    else if (reported === 100) {
-        battery.textContent = "🔋 OK · 100% reportado";
+            "Última lectura: " +
+            batteryText.replace(
+                /^[🔋🪫⚪]\s*/,
+                ""
+            );
     }
     else {
         battery.textContent =
-            "🔋 " + reported + "% reportado";
+            batteryText;
     }
-}
-else if (state.battery_low) {
-    battery.textContent = "🪫 BATERÍA BAJA";
-}
-else {
-    battery.textContent = "⚪ Sin calibrar";
-}
 
-    luminance.textContent =
+    /*
+     * LUMINOSIDAD
+     */
+    if (
         state.luminance_percent === null ||
         state.luminance_percent === undefined
-            ? "—"
-            : state.luminance_percent + " %";
+    ) {
+        luminance.textContent = "—";
+    }
+    else {
+        const text =
+            state.luminance_percent + " %";
 
-    temperature.textContent =
+        luminance.textContent =
+            isOnline
+                ? text
+                : "Última: " + text;
+    }
+
+    /*
+     * TEMPERATURA
+     */
+    if (
         state.temperature_c === null ||
         state.temperature_c === undefined
-            ? "—"
-            : Number(state.temperature_c).toFixed(1) + " °C";
+    ) {
+        temperature.textContent = "—";
+    }
+    else {
+        const text =
+            Number(
+                state.temperature_c
+            ).toFixed(1) + " °C";
 
-    if (state.last_seen &&
-        state.last_seen !== "never") {
+        temperature.textContent =
+            isOnline
+                ? text
+                : "Última: " + text;
+    }
+
+    /*
+     * ÚLTIMA COMUNICACIÓN
+     */
+    if (hasLastSeen) {
         lastSeen.textContent =
-            "Última comunicación: " +
-            state.last_seen;
+            isOnline
+                ? (
+                    "Última comunicación: " +
+                    state.last_seen
+                )
+                : (
+                    "⚠ Sin comunicación desde: " +
+                    state.last_seen
+                );
     }
     else {
         lastSeen.textContent =
             "Esperando primera comunicación";
     }
 }
-
 
 
 const OPEN_WARNING_SECONDS = 120;
@@ -1674,6 +1778,7 @@ function bernalWatchOpenDoors(nodes) {
                 bernalWatchNode(nodes, id);
 
             if (!node ||
+                node.online !== true ||
                 node.contact !== "open")
                 return null;
 
@@ -1681,6 +1786,32 @@ function bernalWatchOpenDoors(nodes) {
                 id,
                 node
             );
+        })
+        .filter(Boolean);
+}
+
+
+function bernalWatchUnknownDoors(nodes) {
+    return BERNAL_WATCH_NODES
+        .map(id => {
+            const node =
+                bernalWatchNode(nodes, id);
+
+            if (
+                !node ||
+                node.online !== true ||
+                (
+                    node.contact !== "open" &&
+                    node.contact !== "closed"
+                )
+            ) {
+                return bernalWatchName(
+                    id,
+                    node
+                );
+            }
+
+            return null;
         })
         .filter(Boolean);
 }
@@ -1781,24 +1912,42 @@ function updateWatchPanel(nodes) {
             bernalLastNodes
         );
 
-    if (!openDoors.length) {
+    if (openDoors.length) {
 
         state.textContent =
-            "✓ ACCESOS PROTEGIDOS";
+            "⚠ ALERTA · " +
+            openDoors.join(", ");
 
         state.classList.add(
-            "watch-secure"
+            "watch-alert"
+        );
+
+        return;
+    }
+
+    const unknownDoors =
+        bernalWatchUnknownDoors(
+            bernalLastNodes
+        );
+
+    if (unknownDoors.length) {
+
+        state.textContent =
+            "⚠ VIGILANCIA PARCIAL · sin comunicación: " +
+            unknownDoors.join(", ");
+
+        state.classList.add(
+            "watch-alert"
         );
 
         return;
     }
 
     state.textContent =
-        "⚠ ALERTA · " +
-        openDoors.join(", ");
+        "✓ ACCESOS PROTEGIDOS";
 
     state.classList.add(
-        "watch-alert"
+        "watch-secure"
     );
 }
 
