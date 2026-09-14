@@ -1621,8 +1621,7 @@ function updateDashboard(nodes) {
         "7": "Puerta trasera",
         "8": "Pérgola 2",
         "9": "Vestidor",
-        "10": "Sala tele",
-        "11": "Habitación matrimonio"
+        "10": "Sala tele"
     };
 
     const openDoors = [];
@@ -1723,10 +1722,18 @@ async function updateState() {
 }
 
 
-const BERNAL_WATCH_NODES = [
-    "3", "4", "5", "6", "7",
-    "8", "9", "10", "11"
+/*
+ * Sensores actualmente incorporados a la red Bernal Home.
+ *
+ * Node 11 está reservado para Habitación matrimonio,
+ * pero todavía no está físicamente incluido.
+ */
+const BERNAL_INSTALLED_NODES = [
+    "3", "4", "5", "6", "7", "8", "9", "10"
 ];
+
+const BERNAL_WATCH_NODES =
+    BERNAL_INSTALLED_NODES;
 
 const BERNAL_WATCH_API =
     "/cgi-bin/bernal-watch";
