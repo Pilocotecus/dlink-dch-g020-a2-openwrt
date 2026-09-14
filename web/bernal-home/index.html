@@ -1616,7 +1616,13 @@ function updateDashboard(nodes) {
     const monitoredDoors = {
         "3": "Puerta pérgola",
         "4": "Puerta principal",
-        "7": "Puerta trasera"
+        "5": "Despacho",
+        "6": "Habitación Laura",
+        "7": "Puerta trasera",
+        "8": "Pérgola 2",
+        "9": "Vestidor",
+        "10": "Sala tele",
+        "11": "Habitación matrimonio"
     };
 
     const openDoors = [];
@@ -1672,7 +1678,7 @@ function updateDashboard(nodes) {
     state.classList.add("dashboard-ok");
 
     detail.textContent =
-        "Puerta principal, puerta pérgola y puerta trasera protegidas";
+        "Todos los sensores protegidos están cerrados y comunicando";
 }
 
 async function updateState() {
