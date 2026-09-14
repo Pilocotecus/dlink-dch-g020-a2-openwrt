@@ -1,4 +1,4 @@
-const CACHE = "bernal-home-v6";
+const CACHE = "bernal-home-v7";
 
 const STATIC_FILES = [
   "/bernal-home/",
@@ -36,7 +36,8 @@ self.addEventListener("fetch", event => {
 
   if (
     url.pathname.endsWith("/state.json") ||
-    url.pathname.endsWith("/history.jsonl")
+    url.pathname.endsWith("/history.jsonl") ||
+    url.pathname.endsWith("/alarm.json")
   ) {
     return;
   }
