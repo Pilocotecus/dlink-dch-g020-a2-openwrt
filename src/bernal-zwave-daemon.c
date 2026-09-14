@@ -498,6 +498,7 @@ static int receive_frame(int fd,
 #define BERNAL_ALARM_TMP  "/tmp/bernal-home/alarm.json.tmp"
 
 static int bernal_alarm_active = 0;
+static int bernal_alarm_armed = -1;
 
 /*
  * History lives in RAM during normal operation.
@@ -826,6 +827,7 @@ static const char *watch_node_name(uint8_t node_id)
 
 
 static int write_alarm_json(int active,
+                            int armed,
                             uint8_t node_id,
                             const char *name,
                             const char *time_text)
@@ -847,10 +849,11 @@ static int write_alarm_json(int active,
             "  \"active\": %s,\n",
             active ? "true" : "false");
 
-    if (active) {
-        fprintf(fp,
-                "  \"armed\": true,\n");
+    fprintf(fp,
+            "  \"armed\": %s,\n",
+            armed ? "true" : "false");
 
+    if (active) {
         fprintf(fp,
                 "  \"node\": %u,\n",
                 (unsigned int)node_id);
@@ -864,9 +867,6 @@ static int write_alarm_json(int active,
                 time_text ? time_text : "");
     }
     else {
-        fprintf(fp,
-                "  \"armed\": false,\n");
-
         fprintf(fp,
                 "  \"node\": null,\n");
 
@@ -894,27 +894,100 @@ static int write_alarm_json(int active,
     }
 
     bernal_alarm_active = active;
+    bernal_alarm_armed = armed;
 
     return 0;
 }
 
 
-static void clear_alarm_if_disarmed(void)
-{
-    if (!bernal_alarm_active)
-        return;
 
-    if (watch_is_armed())
+static int load_alarm_json_state(void)
+{
+    FILE *fp;
+    char buf[1024];
+    size_t n;
+
+    fp = fopen(BERNAL_ALARM_FILE, "r");
+
+    if (!fp)
+        return 0;
+
+    n = fread(buf, 1, sizeof(buf) - 1, fp);
+
+    if (ferror(fp)) {
+        perror("fread alarm.json");
+        fclose(fp);
+        return -1;
+    }
+
+    fclose(fp);
+
+    buf[n] = '\0';
+
+    /*
+     * alarm.json is generated exclusively by this daemon, so parsing the
+     * two boolean fields is sufficient to restore the latch state.
+     * The original JSON file itself is left untouched, preserving
+     * node/name/time of an already latched alarm.
+     */
+    bernal_alarm_active =
+        strstr(buf, "\"active\": true") != NULL;
+
+    bernal_alarm_armed =
+        strstr(buf, "\"armed\": true") != NULL;
+
+    fprintf(stderr,
+            "[WATCH] Restored alarm state: active=%s armed=%s\n",
+            bernal_alarm_active ? "true" : "false",
+            bernal_alarm_armed ? "true" : "false");
+
+    return 1;
+}
+
+
+static void sync_alarm_watch_state(void)
+{
+    int armed = watch_is_armed();
+
+    /*
+     * An active alarm is latched while the system remains armed.
+     * Disarming clears the alarm.
+     */
+    if (bernal_alarm_active) {
+        if (armed)
+            return;
+
+        if (write_alarm_json(
+                0,
+                0,
+                0,
+                NULL,
+                NULL) == 0) {
+
+            fprintf(stderr,
+                    "[WATCH] Alarm cleared: system disarmed\n");
+        }
+
+        return;
+    }
+
+    /*
+     * No alarm is active, but alarm.json must still expose
+     * the real armed/disarmed state.
+     */
+    if (bernal_alarm_armed == armed)
         return;
 
     if (write_alarm_json(
             0,
+            armed,
             0,
             NULL,
             NULL) == 0) {
 
         fprintf(stderr,
-                "[WATCH] Alarm cleared: system disarmed\n");
+                "[WATCH] State synchronized: %s\n",
+                armed ? "ARMED" : "DISARMED");
     }
 }
 
@@ -983,6 +1056,7 @@ static void trigger_watch_alarm(uint8_t node_id)
     name = watch_node_name(node_id);
 
     if (write_alarm_json(
+            1,
             1,
             node_id,
             name,
@@ -1374,13 +1448,34 @@ int main(int argc, char **argv)
         fprintf(stderr,
                 "[!] Initial Bernal Home state unavailable\n");
 
-    if (write_alarm_json(
-            0,
-            0,
-            NULL,
-            NULL) < 0)
-        fprintf(stderr,
-                "[!] Initial Bernal Home alarm state unavailable\n");
+    {
+        int alarm_restored = load_alarm_json_state();
+
+        if (alarm_restored < 0) {
+            fprintf(stderr,
+                    "[!] Existing Bernal Home alarm state unreadable\n");
+        }
+
+        if (alarm_restored <= 0) {
+            if (write_alarm_json(
+                    0,
+                    watch_is_armed(),
+                    0,
+                    NULL,
+                    NULL) < 0) {
+
+                fprintf(stderr,
+                        "[!] Initial Bernal Home alarm state unavailable\n");
+            }
+        }
+        else {
+            /*
+             * Keep an existing latched alarm across daemon restarts.
+             * If WATCH was meanwhile disarmed, synchronization clears it.
+             */
+            sync_alarm_watch_state();
+        }
+    }
 
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
@@ -1419,7 +1514,7 @@ int main(int argc, char **argv)
                 fprintf(stderr,
                         "[!] Periodic state refresh failed\n");
 
-            clear_alarm_if_disarmed();
+            sync_alarm_watch_state();
 
             continue;
         }
@@ -1433,7 +1528,7 @@ int main(int argc, char **argv)
 
         decode_application_command(frame, frame_len);
 
-        clear_alarm_if_disarmed();
+        sync_alarm_watch_state();
     }
 
     print_summary();
